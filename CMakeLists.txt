@@ -3,9 +3,15 @@ project(dual-readout_TB)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(yaml-cpp_DIR /Users/Shared/cvmfs/sft.cern.ch/lcg/releases/yamlcpp/0.6.3-d05b2/arm64-mac12-clang131-opt/lib/cmake/yaml-cpp)
 
 include(GNUInstallDirs)
+
+# Try to find yaml-cpp from Homebrew first, then fall back to CVMFS
+if(EXISTS "/opt/homebrew/opt/yaml-cpp")
+  set(yaml-cpp_DIR "/opt/homebrew/opt/yaml-cpp/lib/cmake/yaml-cpp")
+elseif(EXISTS "/Users/Shared/cvmfs/sft.cern.ch/lcg/releases/yamlcpp")
+  set(yaml-cpp_DIR "/Users/Shared/cvmfs/sft.cern.ch/lcg/releases/yamlcpp/0.6.3-d05b2/arm64-mac15-clang170-opt/lib/cmake/yaml-cpp")
+endif()
 
 find_package(ROOT REQUIRED)
 find_package(yaml-cpp REQUIRED)
@@ -13,8 +19,13 @@ find_package(yaml-cpp REQUIRED)
 
 include_directories(
   ${CMAKE_CURRENT_SOURCE_DIR}/include
-  /Users/Shared/cvmfs/sft.cern.ch/lcg/releases/yamlcpp/0.6.3-d05b2/arm64-mac12-clang131-opt/include
+  ${YAML_CPP_INCLUDE_DIR}
 )
+
+# Add Homebrew library path for linker
+if(EXISTS "/opt/homebrew/opt/yaml-cpp")
+  link_directories("/opt/homebrew/opt/yaml-cpp/lib")
+endif()
 
 file(GLOB sources
   ${PROJECT_SOURCE_DIR}/src/*.cc

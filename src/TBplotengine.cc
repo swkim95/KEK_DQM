@@ -17,10 +17,14 @@ void TBplotengine::init() {
   std::vector<int> fColorVec = {
     TColor::GetColor("#5790fc"),
     TColor::GetColor("#f89c20"),
+    TColor::GetColor("#009E73"),
     TColor::GetColor("#e42536"),
+    TColor::GetColor("#F0E442"),
+    TColor::GetColor("#7a21dd"),
     TColor::GetColor("#964a8b"),
+    TColor::GetColor("#661100"),
     TColor::GetColor("#9c9ca1"),
-    TColor::GetColor("#7a21dd")
+    TColor::GetColor("#44AA99"),
   };
 
   if (fCaseName == "single") {
@@ -92,25 +96,6 @@ void TBplotengine::init() {
     fCanvas = new TCanvas("fCanvasPlot", "fCanvasPlot", 1400, 1400);
 
     Draw();
-  } else if (fCaseName == "heatmap") {
-
-    fCanvas = new TCanvas("fCanvasPlot", "fCanvasPlot", 2700, 1000);
-    fCanvas->Divide(2, 1);
-
-    auto tPadLeft = fCanvas->cd(1);
-    tPadLeft->SetRightMargin(0.13);
-
-    auto tPadRight = fCanvas->cd(2);
-    tPadRight->SetRightMargin(0.13);
-
-    init_2D();
-  } else if (fCaseName == "module") {
-
-    fCanvas = new TCanvas("fCanvasPlot", "fCanvasPlot", 1400, 1400);
-    if (fModule == "M11") fCanvas->Divide(3, 3);
-    else                  fCanvas->Divide(2, 2);
-
-    init_single_module();
   } else if (fCaseName == "full") {
 
     fCanvasFull.push_back(new TCanvas("fCanvasHeatmap", "fCanvasHeatmap", 2700, 1000));
@@ -123,181 +108,28 @@ void TBplotengine::init() {
     tPadRight->SetRightMargin(0.13);
 
     for (int i = 1; i <= 9; i++) {
-      std::string aCanvasName = Form("fCanvas_Module%d", i);
-      fCanvasFull.push_back(new TCanvas((TString)aCanvasName, (TString)aCanvasName, 1400, 1400));
-      fCanvasFull.at(i)->Divide(2, 2);
+      std::string aCanvasName = Form("fCanvas_Tower%d", i);
+      fCanvasFull.push_back(new TCanvas((TString)aCanvasName, (TString)aCanvasName, 1400, 700));
+      fCanvasFull.at(i)->Divide(2, 1);
     }
 
     init_Generic();
   }
 }
 
-void TBplotengine::init_single_module() {
-
-  // std::cout << "TBplotengine::init_single_module()" << " " << fModule << std::endl;
-
-  if (fModule != "M11") {
-    for (int i = 1; i <= 4; i++) {
-      std::string aCName = fModule + "-T" + std::to_string(i) + "-C";
-      TBcid aCCID = fUtility.GetCID(aCName);
-      TButility::mod_info aCInfo = fUtility.GetInfo(aCName);
-
-      fCIDtoPlot_Ceren.push_back(aCCID);
-      std::vector<int> aCinterval = fConfig[aCName].as<std::vector<int>>();
-      fPlotter_Ceren.push_back(TBplotengine::PlotInfo(aCCID, aCName, aCInfo, aCinterval.at(0), aCinterval.at(1)));
-
-      if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-        fPlotter_Ceren.at(i - 1).SetPlot(new TH1D((TString)(aCName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-      if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-        fPlotter_Ceren.at(i - 1).SetPlot(new TH1D((TString)(aCName), ";PeakADC;nEvents", 288, -512., 4096.));
-
-      fPlotter_Ceren.at(i - 1).hist1D->SetLineWidth(2);
-      fPlotter_Ceren.at(i - 1).hist1D->SetLineColor(kBlue);
-
-      std::string aSName = fModule + "-T" + std::to_string(i) + "-S";
-      TBcid aSCID = fUtility.GetCID(aSName);
-      TButility::mod_info aSInfo = fUtility.GetInfo(aSName);
-
-      fCIDtoPlot_Scint.push_back(aSCID);
-      std::vector<int> aSinterval = fConfig[aSName].as<std::vector<int>>();
-      fPlotter_Scint.push_back(TBplotengine::PlotInfo(aSCID, aSName, aSInfo, aSinterval.at(0), aSinterval.at(1)));
-
-      if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-        fPlotter_Scint.at(i - 1).SetPlot(new TH1D((TString)(aSName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-      if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-        fPlotter_Scint.at(i - 1).SetPlot(new TH1D((TString)(aSName), ";PeakADC;nEvents", 288, -512., 4096.));
-
-      fPlotter_Scint.at(i - 1).hist1D->SetLineWidth(2);
-      fPlotter_Scint.at(i - 1).hist1D->SetLineColor(kRed);
-
-      if (i == 1) {
-        fPlotter_Ceren.at(0).hist1D->SetTitle((TString)"Run " + std::to_string(fRunNum));
-        fPlotter_Scint.at(0).hist1D->SetTitle((TString)"Run " + std::to_string(fRunNum));
-      }
-    }
-  } else {
-    for (int i = 1; i <= 9; i++) {
-      if (i == 5 ) {
-
-        fPlotter_Ceren.push_back(TBplotengine::PlotInfo(TBcid(-1, -1), "M11-T5-C", TButility::mod_info(-1, -1, -1), -1, -1));
-        fPlotter_Scint.push_back(TBplotengine::PlotInfo(TBcid(-1, -1), "M11-T5-S", TButility::mod_info(-1, -1, -1), -1, -1));
-      } else {
-
-        std::string aCName = fModule + "-T" + std::to_string(i) + "-C";
-        TBcid aCCID = fUtility.GetCID(aCName);
-        TButility::mod_info aCInfo = fUtility.GetInfo(aCName);
-
-        fCIDtoPlot_Ceren.push_back(aCCID);
-        std::vector<int> aCinterval = fConfig[aCName].as<std::vector<int>>();
-        fPlotter_Ceren.push_back(TBplotengine::PlotInfo(aCCID, aCName, aCInfo, aCinterval.at(0), aCinterval.at(1)));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-          fPlotter_Ceren.at(i - 1).SetPlot(new TH1D((TString)(aCName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-          fPlotter_Ceren.at(i - 1).SetPlot(new TH1D((TString)(aCName), ";PeakADC;nEvents", 288, -512., 4096.));
-
-        fPlotter_Ceren.at(i - 1).hist1D->SetLineWidth(2);
-        fPlotter_Ceren.at(i - 1).hist1D->SetLineColor(kBlue);
-
-        std::string aSName = fModule + "-T" + std::to_string(i) + "-S";
-        TBcid aSCID = fUtility.GetCID(aSName);
-        TButility::mod_info aSInfo = fUtility.GetInfo(aSName);
-
-        fCIDtoPlot_Scint.push_back(aSCID);
-        std::vector<int> aSinterval = fConfig[aSName].as<std::vector<int>>();
-        fPlotter_Scint.push_back(TBplotengine::PlotInfo(aSCID, aSName, aSInfo, aSinterval.at(0), aSinterval.at(1)));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-          fPlotter_Scint.at(i - 1).SetPlot(new TH1D((TString)(aSName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-          fPlotter_Scint.at(i - 1).SetPlot(new TH1D((TString)(aSName), ";PeakADC;nEvents", 288, -512., 4096.));
-
-        fPlotter_Scint.at(i - 1).hist1D->SetLineWidth(2);
-        fPlotter_Scint.at(i - 1).hist1D->SetLineColor(kRed);
-
-        if (i == 1) {
-          fPlotter_Ceren.at(0).hist1D->SetTitle((TString)"Run " + std::to_string(fRunNum));
-          fPlotter_Scint.at(0).hist1D->SetTitle((TString)"Run " + std::to_string(fRunNum));
-        }
-      }
-    }
-  }
-
-  // std::cout << fCIDtoPlot_Ceren.size() << std::endl;
-  // for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-  //   std::cout << i << " " << fPlotter_Ceren.at(i).name << " " << fPlotter_Ceren.at(i).info.row << " " << fPlotter_Ceren.at(i).info.col << " ";
-  //   fPlotter_Ceren.at(i).cid.print();
-  // }
-
-  // std::cout << fCIDtoPlot_Scint.size() << std::endl;
-  // for (int i = 0; i < fPlotter_Scint.size(); i++) {
-  //   std::cout << i << " " << fPlotter_Scint.at(i).name << " " << fPlotter_Scint.at(i).info.row << " " << fPlotter_Scint.at(i).info.col << " ";
-  //   fPlotter_Scint.at(i).cid.print();
-  // }
-
-  Draw();
-}
-
-void TBplotengine::init_2D() {
-
-  if (fModule == "MCPPMT") init_MCPPMT();
-  if (fModule == "SiPM")   init_SiPM();
-  if (fModule == "Generic") init_Generic();
-
-}
 
 void TBplotengine::init_Generic() {
 
   std::vector<std::string> plotVec = {
-
-    "M1-T1",
-    "M1-T2",
-    "M1-T3",
-    "M1-T4",
-
-    "M2-T1",
-    "M2-T2",
-    "M2-T3",
-    "M2-T4",
-
-    "M3-T1",
-    "M3-T2",
-    "M3-T3",
-    "M3-T4",
-
-    "M4-T1",
-    "M4-T2",
-    "M4-T3",
-    "M4-T4",
-
-    "M5-T1",
-    "M5-T2",
-    "M5-T3",
-    "M5-T4",
-
-    "M6-T1",
-    "M6-T2",
-    "M6-T3",
-    "M6-T4",
-
-    "M7-T1",
-    "M7-T2",
-    "M7-T3",
-    "M7-T4",
-
-    "M8-T1",
-    "M8-T2",
-    "M8-T3",
-    "M8-T4",
-
-    "M9-T1",
-    "M9-T2",
-    "M9-T3",
-    "M9-T4"
+    "T1",
+    "T2",
+    "T3",
+    "T4",
+    "T5",
+    "T6",
+    "T7",
+    "T8",
+    "T9"
   };
 
 
@@ -342,13 +174,13 @@ void TBplotengine::init_Generic() {
 
   }
 
-  f2DHistCeren = new TH2D("CERENKOV", "CERENKOV;;", 6, 0.5, 6.5, 6, 0.5, 6.5);
+  f2DHistCeren = new TH2D("CERENKOV", "CERENKOV;;", 3, 0.5, 3.5, 3, 0.5, 3.5);
   f2DHistCeren->SetStats(0);
 
-  f2DHistScint = new TH2D("SCINTILLATION", "SCINTILLATION;;", 6, 0.5, 6.5, 6, 0.5, 6.5);
+  f2DHistScint = new TH2D("SCINTILLATION", "SCINTILLATION;;", 3, 0.5, 3.5, 3, 0.5, 3.5);
   f2DHistScint->SetStats(0);
 
-  for (int i = 1; i <= 6; i++) {
+  for (int i = 1; i <= 3; i++) {
     f2DHistCeren->GetXaxis()->SetBinLabel(i, std::to_string(i).c_str());
     f2DHistCeren->GetYaxis()->SetBinLabel(i, std::to_string(i).c_str());
     f2DHistScint->GetXaxis()->SetBinLabel(i, std::to_string(i).c_str());
@@ -358,139 +190,6 @@ void TBplotengine::init_Generic() {
   Draw();
 }
 
-void TBplotengine::init_MCPPMT() {
-
-  for (int i = 0; i < 64; i++) {
-    std::string aName = "C" + std::to_string(i + 1);
-    TBcid aCID = fUtility.GetCID(aName);
-    TButility::mod_info aInfo = fUtility.GetInfo(aName);
-
-    fCIDtoPlot_Ceren.push_back(aCID);
-
-    std::vector<int> interval = fConfig[aName].as<std::vector<int>>();
-    fPlotter_Ceren.push_back(TBplotengine::PlotInfo(aCID, aName, aInfo, interval.at(0), interval.at(1)));
-
-    if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-      fPlotter_Ceren.at(i).SetPlot(new TH1D((TString)(aName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-    if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-      fPlotter_Ceren.at(i).SetPlot(new TH1D((TString)(aName), ";PeakADC;nEvents", 288, -512., 4096.));
-  }
-
-  f2DHistCeren = new TH2D("CERENKOV", "CERENKOV;;", 8, 0.5, 8.5, 8, 0.5, 8.5);
-  f2DHistCeren->SetStats(0);
-
-  for (int i = 0; i < 64; i++) {
-    std::string aName = "S" + std::to_string(i + 1);
-    TBcid aCID = fUtility.GetCID(aName);
-    TButility::mod_info aInfo = fUtility.GetInfo(aCID);
-
-    fCIDtoPlot_Scint.push_back(aCID);
-
-    std::vector<int> interval = fConfig[aName].as<std::vector<int>>();
-    fPlotter_Scint.push_back(TBplotengine::PlotInfo(aCID, aName, aInfo, interval.at(0), interval.at(1)));
-
-    if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-      fPlotter_Scint.at(i).SetPlot(new TH1D((TString)(aName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-    if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-      fPlotter_Scint.at(i).SetPlot(new TH1D((TString)(aName), ";PeakADC;nEvents", 288, -512., 4096.));
-  }
-
-  f2DHistScint = new TH2D("SCINTILLATION", "SCINTILLATION;;", 8, 0.5, 8.5, 8, 0.5, 8.5);
-  f2DHistScint->SetStats(0);
-
-  for (int i = 1; i <= 8; i++) {
-    f2DHistCeren->GetXaxis()->SetBinLabel(i, std::to_string(i).c_str());
-    f2DHistCeren->GetYaxis()->SetBinLabel(i, std::to_string(i).c_str());
-    f2DHistScint->GetXaxis()->SetBinLabel(i, std::to_string(i).c_str());
-    f2DHistScint->GetYaxis()->SetBinLabel(i, std::to_string(i).c_str());
-  }
-
-  // std::cout << fCIDtoPlot_Ceren.size() << std::endl;
-  // for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-  //   std::cout << i << " " << fPlotter_Ceren.at(i).name << " " << fPlotter_Ceren.at(i).info.row << " " << fPlotter_Ceren.at(i).info.col << " ";
-  //   fPlotter_Ceren.at(i).cid.print();
-  // }
-
-  // std::cout << fCIDtoPlot_Scint.size() << std::endl;
-  // for (int i = 0; i < fPlotter_Scint.size(); i++) {
-  //   std::cout << i << " " << fPlotter_Scint.at(i).name << " " << fPlotter_Scint.at(i).info.row << " " << fPlotter_Scint.at(i).info.col << " ";
-  //   fPlotter_Scint.at(i).cid.print();
-  // }
-
-  Draw();
-}
-
-void TBplotengine::init_SiPM() {
-  // std::cout << "init_SiPM" << std::endl;
-  for (int i = 21; i <= 40; i++) {
-    for (int j = 21; j <= 40; j++) {
-
-      std::string aName = std::to_string(i) + "-" + std::to_string(j);
-      TBcid aCID = fUtility.GetCID(aName);
-      TButility::mod_info aInfo = fUtility.GetInfo(aName);
-
-      if (aInfo.isCeren == -1)
-        continue;
-
-      if (aInfo.isCeren) {
-
-        fCIDtoPlot_Ceren.push_back(aCID);
-
-        std::vector<int> interval = fConfig[aName].as<std::vector<int>>();
-        fPlotter_Ceren.push_back(TBplotengine::PlotInfo(aCID, aName, aInfo, interval.at(0), interval.at(1)));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-          fPlotter_Ceren.at(fPlotter_Ceren.size() - 1).SetPlot(new TH1D((TString)(aName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-          fPlotter_Ceren.at(fPlotter_Ceren.size() - 1).SetPlot(new TH1D((TString)(aName), ";PeakADC;nEvents", 288, -512., 4096.));
-
-      } else {
-
-        fCIDtoPlot_Scint.push_back(aCID);
-
-        std::vector<int> interval = fConfig[aName].as<std::vector<int>>();
-        fPlotter_Scint.push_back(TBplotengine::PlotInfo(aCID, aName, aInfo, interval.at(0), interval.at(1)));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kIntADC)
-          fPlotter_Scint.at(fPlotter_Scint.size() - 1).SetPlot(new TH1D((TString)(aName), ";IntADC;nEvents", 440, -30000., 300000.));
-
-        if (fCalcInfo == TBplotengine::CalcInfo::kPeakADC)
-          fPlotter_Scint.at(fPlotter_Scint.size() - 1).SetPlot(new TH1D((TString)(aName), ";PeakADC;nEvents", 288, -512., 4096.));
-
-      }
-    }
-  }
-
-  f2DHistCeren = new TH2D("CERENKOV", "CERENKOV;;", 20, 0.5, 20.5, 20, 0.5, 20.5);
-  f2DHistCeren->SetStats(0);
-
-  f2DHistScint = new TH2D("SCINTILLATION", "SCINTILLATION;;", 20, 0.5, 20.5, 20, 0.5, 20.5);
-  f2DHistScint->SetStats(0);
-
-  for (int i = 1; i <= 20; i++) {
-    f2DHistCeren->GetXaxis()->SetBinLabel(i, std::to_string(i + 20).c_str());
-    f2DHistCeren->GetYaxis()->SetBinLabel(i, std::to_string(i + 20).c_str());
-    f2DHistScint->GetXaxis()->SetBinLabel(i, std::to_string(i + 20).c_str());
-    f2DHistScint->GetYaxis()->SetBinLabel(i, std::to_string(i + 20).c_str());
-  }
-
-  // std::cout << fCIDtoPlot_Ceren.size() << std::endl;
-  // for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-  //   std::cout << i << " " << fPlotter_Ceren.at(i).name << " " << fPlotter_Ceren.at(i).info.row << " " << fPlotter_Ceren.at(i).info.col << " ";
-  //   fPlotter_Ceren.at(i).cid.print();
-  // }
-
-  // std::cout << fCIDtoPlot_Scint.size() << std::endl;
-  // for (int i = 0; i < fPlotter_Scint.size(); i++) {
-  //   std::cout << i << " " << fPlotter_Scint.at(i).name << " " << fPlotter_Scint.at(i).info.row << " " << fPlotter_Scint.at(i).info.col << " ";
-  //   fPlotter_Scint.at(i).cid.print();
-  // }
-
-  Draw();
-}
 
 double TBplotengine::GetPeakADC(std::vector<short> waveform, int xInit, int xFin) {
   double ped = 0;
@@ -509,19 +208,6 @@ double TBplotengine::GetIntADC(std::vector<short> waveform, int xInit, int xFin)
   double ped = 0;
   for (int i = 1; i < 101; i++)
     ped += (double)waveform.at(i) / 100.;
-
-  double intADC_ = 0;
-  for (int i = xInit; i < xFin; i++)
-    intADC_ += ped - (double)waveform.at(i);
-
-  return intADC_;
-}
-
-double TBplotengine::GetIntADC_MCPPMTSingleChannel(std::vector<short> waveform, int xInit, int xFin) {
-
-  double ped = 0;
-  for (int i = 1; i < 41; i++)
-    ped += (double)waveform.at(i) / 40.;
 
   double intADC_ = 0;
   for (int i = xInit; i < xFin; i++)
@@ -559,33 +245,26 @@ void TBplotengine::Fill(TBevt<TBwaveform> anEvent) {
       }
     }
 
-  } else if (fCaseName == "heatmap" || fCaseName == "full") {
+  } else if (fCaseName == "full") {
 
     for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-
       double value = GetValue(anEvent.GetData(fPlotter_Ceren.at(i).cid).waveform(), fPlotter_Ceren.at(i).xInit, fPlotter_Ceren.at(i).xFin);
       fPlotter_Ceren.at(i).hist1D->Fill(value);
-      // std::cout << i << " " <<  fPlotter_Ceren.at(i).cid.mid() << " " << fPlotter_Ceren.at(i).cid.channel() << std::endl;
+      
+      // Fill heatmap for Cerenkov
+      if (fPlotter_Ceren.at(i).info.row > 0 && fPlotter_Ceren.at(i).info.col > 0) {
+        f2DHistCeren->Fill(fPlotter_Ceren.at(i).info.col, fPlotter_Ceren.at(i).info.row, value);
+      }
     }
 
     for (int i = 0; i < fPlotter_Scint.size(); i++) {
-
       double value = GetValue(anEvent.GetData(fPlotter_Scint.at(i).cid).waveform(), fPlotter_Scint.at(i).xInit, fPlotter_Scint.at(i).xFin);
       fPlotter_Scint.at(i).hist1D->Fill(value);
-      // std::cout << i << " " << fPlotter_Scint.at(i).cid.mid() << " " << fPlotter_Scint.at(i).cid.channel() << std::endl;
-    }
-  } else if (fCaseName == "module") {
-
-    for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-      if (i == 4) continue;
-      double value = GetValue(anEvent.GetData(fPlotter_Ceren.at(i).cid).waveform(), fPlotter_Ceren.at(i).xInit, fPlotter_Ceren.at(i).xFin);
-      fPlotter_Ceren.at(i).hist1D->Fill(value);
-    }
-
-    for (int i = 0; i < fPlotter_Scint.size(); i++) {
-      if (i == 4) continue;
-      double value = GetValue(anEvent.GetData(fPlotter_Scint.at(i).cid).waveform(), fPlotter_Scint.at(i).xInit, fPlotter_Scint.at(i).xFin);
-      fPlotter_Scint.at(i).hist1D->Fill(value);
+      
+      // Fill heatmap for Scintillation
+      if (fPlotter_Scint.at(i).info.row > 0 && fPlotter_Scint.at(i).info.col > 0) {
+        f2DHistScint->Fill(fPlotter_Scint.at(i).info.col, fPlotter_Scint.at(i).info.row, value);
+      }
     }
   }
 }
@@ -613,21 +292,6 @@ void TBplotengine::Draw() {
         fLeg->Draw("same");
     }
 
-  } else if (fCaseName == "heatmap") {
-    fCanvas->cd(1);
-    f2DHistCeren->Draw("colz text");
-
-    fCanvas->cd(2);
-    f2DHistScint->Draw("colz text");
-  } else if (fCaseName == "module") {
-
-    for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-      if (i == 4) continue;
-
-      fCanvas->cd(i + 1);
-      fPlotter_Ceren.at(i).hist1D->Draw("Hist");
-      fPlotter_Scint.at(i).hist1D->Draw("Hist & sames");
-    }
   } else if (fCaseName == "full") {
     
     fCanvasFull.at(0)->cd(1);
@@ -637,12 +301,13 @@ void TBplotengine::Draw() {
     f2DHistScint->Draw("colz text");
 
     for (int idx = 0; idx < fPlotter_Ceren.size(); idx++) {
-      int iModule = idx / 4 + 1;
-      int iTower = idx % 4 + 1;
+      int iTower = idx + 1;
 
-      fCanvasFull.at(iModule)->cd(iTower);
+      fCanvasFull.at(iTower)->cd(1);
       fPlotter_Ceren.at(idx).hist1D->Draw("Hist");
-      fPlotter_Scint.at(idx).hist1D->Draw("Hist & sames");
+      
+      fCanvasFull.at(iTower)->cd(2);
+      fPlotter_Scint.at(idx).hist1D->Draw("Hist");
     }
   }
 
@@ -695,100 +360,6 @@ void TBplotengine::Update() {
         fLeg->Draw("same");
       }
     }
-  } else if (fCaseName == "heatmap") {
-
-    f2DHistCeren->SetTitle((TString)"Run " + std::to_string(fRunNum) + " CERENKOV - " + std::to_string((int)fPlotter_Ceren.at(0).hist1D->GetEntries()));
-    for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-      f2DHistCeren->SetBinContent(fPlotter_Ceren.at(i).info.row, fPlotter_Ceren.at(i).info.col, (int)fPlotter_Ceren.at(i).hist1D->GetMean());
-
-      // std::cout << "CEREN - " << i
-      //           << " " << fPlotter_Ceren.at(i).name
-      //           << " " << fPlotter_Ceren.at(i).cid.mid()
-      //           << " " << fPlotter_Ceren.at(i).cid.channel()
-      //           << " " << fPlotter_Ceren.at(i).info.row
-      //           << " " << fPlotter_Ceren.at(i).info.col
-      //           << " " << fPlotter_Ceren.at(i).hist1D->GetMean() << std::endl;
-
-    }
-
-    f2DHistScint->SetTitle((TString)"Run " + std::to_string(fRunNum) + " SCINTILLATION - " + std::to_string((int)fPlotter_Scint.at(0).hist1D->GetEntries()));
-    for (int i = 0; i < fPlotter_Scint.size(); i++) {
-      f2DHistScint->SetBinContent(fPlotter_Scint.at(i).info.row, fPlotter_Scint.at(i).info.col, (int)fPlotter_Scint.at(i).hist1D->GetMean());
-
-      // std::cout << "SCINT - " << i
-      //           << " " << fPlotter_Scint.at(i).name
-      //           << " " << fPlotter_Scint.at(i).cid.mid()
-      //           << " " << fPlotter_Scint.at(i).cid.channel()
-      //           << " " << fPlotter_Ceren.at(i).info.row
-      //           << " " << fPlotter_Ceren.at(i).info.col
-      //           << " " << fPlotter_Scint.at(i).hist1D->GetMean() << std::endl;
-
-    }
-    fCanvas->cd(1);
-    f2DHistCeren->Draw("colz text");
-
-    fCanvas->cd(2);
-    f2DHistScint->Draw("colz text");
-
-  } else if (fCaseName == "module") {
-
-    for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-      if (i == 4) continue;
-
-      if (fPlotter_Ceren.at(i).hist1D->GetMaximum() > fPlotter_Ceren.at(i).hist1D->GetMaximum()) {
-
-        fCanvas->cd(i + 1);
-        fPlotter_Ceren.at(i).hist1D->Draw("Hist");
-
-        if (fIsFirst) {
-          fCanvas->Update();
-          TPaveStats* stat_c = (TPaveStats*)fPlotter_Ceren.at(i).hist1D->FindObject("stats");
-          stat_c->SetTextColor(4);
-          stat_c->SetY2NDC(1.);
-          stat_c->SetY1NDC(.8);
-          stat_c->SaveStyle();
-        }
-
-        fCanvas->cd(i + 1);
-        fPlotter_Scint.at(i).hist1D->Draw("Hist & sames");
-
-        if (fIsFirst) {
-          fCanvas->Update();
-          TPaveStats* stat_s = (TPaveStats*)fPlotter_Scint.at(i).hist1D->FindObject("stats");
-          stat_s->SetTextColor(2);
-          stat_s->SetY2NDC(.8);
-          stat_s->SetY1NDC(.6);
-          stat_s->SaveStyle();
-        }
-      } else {
-
-        fCanvas->cd(i + 1);
-        fPlotter_Scint.at(i).hist1D->Draw("Hist");
-
-        if (fIsFirst) {
-          fCanvas->Update();
-          TPaveStats* stat_s = (TPaveStats*)fPlotter_Scint.at(i).hist1D->FindObject("stats");
-          stat_s->SetTextColor(2);
-          stat_s->SetY2NDC(.8);
-          stat_s->SetY1NDC(.6);
-          stat_s->SaveStyle();
-        }
-
-        fCanvas->cd(i + 1);
-        fPlotter_Ceren.at(i).hist1D->Draw("Hist & sames");
-
-        if (fIsFirst) {
-          fCanvas->Update();
-          TPaveStats* stat_c = (TPaveStats*)fPlotter_Ceren.at(i).hist1D->FindObject("stats");
-          stat_c->SetTextColor(4);
-          stat_c->SetY2NDC(1.);
-          stat_c->SetY1NDC(.8);
-          stat_c->SaveStyle();
-        }
-      }
-    }
-
-    fIsFirst = false;
   } else if (fCaseName == "full") {
 
     f2DHistCeren->SetTitle((TString)"Run " + std::to_string(fRunNum) + " CERENKOV - " + std::to_string((int)fPlotter_Ceren.at(0).hist1D->GetEntries()));
@@ -809,62 +380,15 @@ void TBplotengine::Update() {
 
 
     for (int idx = 0; idx < fPlotter_Ceren.size(); idx++) {
-      int iModule = idx / 4 + 1;
-      int iTower = idx % 4 + 1;
+      int iTower = idx + 1;
       
-      if (fPlotter_Ceren.at(idx).hist1D->GetMaximum() > fPlotter_Scint.at(idx).hist1D->GetMaximum()) {
-
-        fCanvasFull.at(iModule)->cd(iTower);
-        fPlotter_Ceren.at(idx).hist1D->Draw("Hist");
-
-        if (fIsFirst) {
-          fCanvasFull.at(iModule)->Update();
-          TPaveStats* stat_c = (TPaveStats*)fPlotter_Ceren.at(idx).hist1D->FindObject("stats");
-          stat_c->SetTextColor(4);
-          stat_c->SetY2NDC(1.);
-          stat_c->SetY1NDC(.8);
-          stat_c->SaveStyle();
-        }
-
-        fCanvasFull.at(iModule)->cd(iTower);
-        fPlotter_Scint.at(idx).hist1D->Draw("Hist & sames");
-
-        if (fIsFirst) {
-          fCanvasFull.at(iModule)->Update();
-          TPaveStats* stat_s = (TPaveStats*)fPlotter_Scint.at(idx).hist1D->FindObject("stats");
-          stat_s->SetTextColor(2);
-          stat_s->SetY2NDC(.8);
-          stat_s->SetY1NDC(.6);
-          stat_s->SaveStyle();
-        }
-
-      } else {
-
-        fCanvasFull.at(iModule)->cd(iTower);
-        fPlotter_Scint.at(idx).hist1D->Draw("Hist");
-
-        if (fIsFirst) {
-          fCanvasFull.at(iModule)->Update();
-          TPaveStats* stat_s = (TPaveStats*)fPlotter_Scint.at(idx).hist1D->FindObject("stats");
-          stat_s->SetTextColor(2);
-          stat_s->SetY2NDC(.8);
-          stat_s->SetY1NDC(.6);
-          stat_s->SaveStyle();
-        }
-
-        fCanvasFull.at(iModule)->cd(iTower);
-        fPlotter_Ceren.at(idx).hist1D->Draw("Hist & sames");
-
-        if (fIsFirst) {
-          fCanvasFull.at(iModule)->Update();
-          TPaveStats* stat_c = (TPaveStats*)fPlotter_Ceren.at(idx).hist1D->FindObject("stats");
-          stat_c->SetTextColor(4);
-          stat_c->SetY2NDC(1.);
-          stat_c->SetY1NDC(.8);
-          stat_c->SaveStyle();
-        }
-      }
-      fCanvasFull.at(iModule)->Update();
+      fCanvasFull.at(iTower)->cd(1);
+      fPlotter_Ceren.at(idx).hist1D->Draw("Hist");
+      
+      fCanvasFull.at(iTower)->cd(2);
+      fPlotter_Scint.at(idx).hist1D->Draw("Hist");
+      
+      fCanvasFull.at(iTower)->Update();
     }
 
     if (fIsFirst)fIsFirst = false;
@@ -947,28 +471,6 @@ void TBplotengine::SaveAs(TString output = "")
       for (int i = 0; i < fPlotter_Ceren.size(); i++)
         fPlotter_Ceren.at(i).hist1D->Write();
     }
-
-  } else if (fCaseName == "heatmap") {
-    f2DHistCeren->Write();
-    f2DHistScint->Write();
-
-    for (int i = 0; i < fPlotter_Ceren.size(); i++)
-      fPlotter_Ceren.at(i).hist1D->Write();
-
-    for (int i = 0; i < fPlotter_Scint.size(); i++)
-      fPlotter_Scint.at(i).hist1D->Write();
-
-  } else if (fCaseName == "module") {
-
-    for (int i = 0; i < fPlotter_Ceren.size(); i++) {
-      if (i == 4) continue;
-      fPlotter_Ceren.at(i).hist1D->Write();
-    }
-
-    for (int i = 0; i < fPlotter_Scint.size(); i++) {
-      if (i == 4) continue;
-      fPlotter_Scint.at(i).hist1D->Write();
-    }
   }
 
   outoutFile->Close();
@@ -976,10 +478,8 @@ void TBplotengine::SaveAs(TString output = "")
 
 std::vector<int> TBplotengine::GetUniqueMID() {
   if (fCaseName == "single") {
-
     return fUtility.GetUniqueMID(fCIDtoPlot_Ceren);
-  } else if (fCaseName == "heatmap" || fCaseName == "module" || fCaseName == "full") {
-
+  } else if (fCaseName == "full") {
     return fUtility.GetUniqueMID(fCIDtoPlot_Ceren, fCIDtoPlot_Scint);
   }
 

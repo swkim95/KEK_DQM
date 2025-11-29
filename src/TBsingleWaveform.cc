@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <chrono>
+#include <fstream>
 
 #include <mach/mach.h>
 #include <mach/vm_statistics.h>
@@ -20,6 +21,7 @@
 #include "TSystem.h"
 #include "TStyle.h"
 #include "TPaveStats.h"
+#include "TROOT.h"
 
 
 TBsingleWaveform::TBsingleWaveform(ObjectCollection* fObj) 
@@ -35,16 +37,37 @@ TBsingleWaveform::TBsingleWaveform(ObjectCollection* fObj)
   fObj->GetVariable("RunNumber", &fRunNum);
   fObj->GetVariable("MaxEvent", &fMaxEvent);
   fObj->GetVariable("SkipEvent", &fSkipEvent);
-  fObj->GetVector("module", &fNametoPlot);
+  
+  std::vector<std::string> tempModuleVec;
+  fObj->GetVector("module", &tempModuleVec);
+  
+  // Expand module names: "T1" -> ["T1-C", "T1-S"], "T1-C" -> ["T1-C"]
+  for (const auto& moduleName : tempModuleVec) {
+    // Check if already has -C or -S suffix
+    if (moduleName.find("-C") != std::string::npos || moduleName.find("-S") != std::string::npos) {
+      // Already specified, use as is
+      fNametoPlot.push_back(moduleName);
+    } else {
+      // Tower name only (e.g., "T1"), expand to both C and S
+      fNametoPlot.push_back(moduleName + "-C");
+      fNametoPlot.push_back(moduleName + "-S");
+    }
+  }
 
   if (fSkipEvent == -1) fSkipEvent = 0;
 
-  fOutputName = (TString)Form("./output/Run%d_SingleWaveform.gif", fRunNum);
+  // Create waveforms directory if it doesn't exist
+  gSystem->mkdir("./output/waveforms", kTRUE);
+  
+  fOutputName = (TString)Form("./output/waveforms/Run%d_SingleWaveform", fRunNum);
 
   init();
 }
 
 void TBsingleWaveform::init() {
+
+  // Enable batch mode for ROOT
+  gROOT->SetBatch(kTRUE);
 
   std::vector<int> fColorVec = {
     TColor::GetColor("#5790fc"),
@@ -116,7 +139,7 @@ void TBsingleWaveform::Loop() {
   
   ANSI_CODE ANSI = ANSI_CODE();
 
-
+  std::vector<std::string> fOutputFiles;
   std::vector<int> tUniqueMID = GetUniqueMID();
   TBread<TBwaveform> readerWave = TBread<TBwaveform>(fRunNum, fSkipEvent + fMaxEvent, 1, false, fBaseDir, tUniqueMID);
 
@@ -156,7 +179,8 @@ void TBsingleWaveform::Loop() {
 
     SetMaximum();
     
-    fMainFrame->SetTitle(Form("Run %d, Event %d", fRunNum, readerWave.GetCurrentEvent()));
+    int currentEvent = readerWave.GetCurrentEvent();
+    fMainFrame->SetTitle(Form("Run %d, Event %d", fRunNum, currentEvent));
 
     fCanvas->cd();
     fMainFrame->Draw();
@@ -165,13 +189,35 @@ void TBsingleWaveform::Loop() {
     }
     fLeg->Draw();
     fCanvas->Update();
-    fCanvas->Print(fOutputName + "+");
+    
+    // Save each event as individual PNG file
+    TString pngFileName = Form("%s_evt%d.png", fOutputName.Data(), currentEvent);
+    fCanvas->SaveAs(pngFileName);
+    fOutputFiles.push_back(pngFileName.Data());
 
     for (int iCh = 0; iCh < fHistWaveform.size(); iCh++)
       fHistWaveform.at(iCh)->Reset("ICES");
   }
 
-  fCanvas->Print(fOutputName + "++");
+  // Save file list as JSON for web UI in output root directory
+  TString jsonFileName = Form("./output/Run%d_SingleWaveform.json", fRunNum);
+  std::ofstream jsonFile(jsonFileName.Data());
+  jsonFile << "{\"files\":[";
+  for (size_t i = 0; i < fOutputFiles.size(); i++) {
+    // Store relative paths from output directory
+    std::string relativePath = fOutputFiles[i];
+    size_t pos = relativePath.find("./output/");
+    if (pos != std::string::npos) {
+      relativePath = relativePath.substr(pos + 9); // Remove "./output/" prefix
+    }
+    jsonFile << "\"" << relativePath << "\"";
+    if (i < fOutputFiles.size() - 1) jsonFile << ",";
+  }
+  jsonFile << "],\"total\":" << fOutputFiles.size() << "}";
+  jsonFile.close();
+  
+  std::cout << "\n✅ Generated " << fOutputFiles.size() << " PNG files in ./output/waveforms/" << std::endl;
+  std::cout << "📄 File list saved to " << jsonFileName.Data() << std::endl;
 }
 
 void TBsingleWaveform::SetMaximum() {

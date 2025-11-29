@@ -17,8 +17,8 @@ TBaux::TBaux(const YAML::Node fNodePlot_, int fRunNum_, bool fPlotting_, bool fL
 
 void TBaux::init() {
 
-  fCIDtoPlot.push_back(fUtility.GetCID("CC1"));
-  fCIDtoPlot.push_back(fUtility.GetCID("CC2"));
+  // fCIDtoPlot.push_back(fUtility.GetCID("CC1"));
+  // fCIDtoPlot.push_back(fUtility.GetCID("CC2"));
   fCIDtoPlot.push_back(fUtility.GetCID("DWC1R"));
   fCIDtoPlot.push_back(fUtility.GetCID("DWC1L"));
   fCIDtoPlot.push_back(fUtility.GetCID("DWC1U"));
@@ -27,16 +27,16 @@ void TBaux::init() {
   fCIDtoPlot.push_back(fUtility.GetCID("DWC2L"));
   fCIDtoPlot.push_back(fUtility.GetCID("DWC2U"));
   fCIDtoPlot.push_back(fUtility.GetCID("DWC2D"));
-  fCIDtoPlot.push_back(fUtility.GetCID("PS"));
-  fCIDtoPlot.push_back(fUtility.GetCID("MC"));
-  fCIDtoPlot.push_back(fUtility.GetCID("TC"));
+  // fCIDtoPlot.push_back(fUtility.GetCID("PS"));
+  // fCIDtoPlot.push_back(fUtility.GetCID("MC"));
+  // fCIDtoPlot.push_back(fUtility.GetCID("TC"));
 
-  fPScut = fNodeAux["PS"][fMethod].as<double>();
-  fMCcut = fNodeAux["MC"][fMethod].as<double>();
-  fCC1cut = -1;
-  fCC2cut = -1;
-  fPSInitCut = -1;
-  fPSFinCut = -1;
+  // fPScut = fNodeAux["PS"][fMethod].as<double>();
+  // fMCcut = fNodeAux["MC"][fMethod].as<double>();
+  // fCC1cut = -1;
+  // fCC2cut = -1;
+  // fPSInitCut = -1;
+  // fPSFinCut = -1;
   fDWCPosCut = fNodeAux["DWC"]["POSCUT"].as<double>();
   fDWCCorr = fNodeAux["DWC"]["CORR"].as<double>();
 
@@ -52,85 +52,85 @@ void TBaux::init() {
   fDWCYaxis = new TH2D("DWC_Y", "DWC Y corr;DWC 1 Y [mm];DWC 2 Y [mm]", 200, -50., 50., 200, -50., 50.);
   fDWCYaxis->SetStats(0);
 
-  if (fMethod == "IntADC") {
-    fPS = new TH1D("PS_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
-    fMC = new TH1D("MC_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
-    fTC = new TH1D("TC_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
-    fCC1 = new TH1D("CC1_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
-    fCC2 = new TH1D("CC2_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
-    fFrameTop = new TH1D("TopFrame", ";IntADC;nEvents", 440, -30000., 300000.);
-    fFrameBot = new TH1D("BotFrame", ";IntADC;nEvents", 440, -30000., 300000.);
-  } else if (fMethod == "PeakADC") {
-    fPS = new TH1D("PS_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
-    fMC = new TH1D("MC_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
-    fTC = new TH1D("TC_AUX", ";IntADC;nEvents", 1152, -512., 4096.);
-    fCC1 = new TH1D("CC1_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
-    fCC2 = new TH1D("CC2_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
-    fFrameTop = new TH1D("TopFrame", ";PeakADC;nEvents", 1152, -512., 4096.);
-    fFrameBot = new TH1D("BotFrame", ";PeakADC;nEvents", 1152, -512., 4096.);
-  }
+  // if (fMethod == "IntADC") {
+  //   fPS = new TH1D("PS_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
+  //   fMC = new TH1D("MC_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
+  //   fTC = new TH1D("TC_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
+  //   fCC1 = new TH1D("CC1_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
+  //   fCC2 = new TH1D("CC2_AUX", ";IntADC;nEvents", 440, -30000., 300000.);
+  //   fFrameTop = new TH1D("TopFrame", ";IntADC;nEvents", 440, -30000., 300000.);
+  //   fFrameBot = new TH1D("BotFrame", ";IntADC;nEvents", 440, -30000., 300000.);
+  // } else if (fMethod == "PeakADC") {
+  //   fPS = new TH1D("PS_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
+  //   fMC = new TH1D("MC_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
+  //   fTC = new TH1D("TC_AUX", ";IntADC;nEvents", 1152, -512., 4096.);
+  //   fCC1 = new TH1D("CC1_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
+  //   fCC2 = new TH1D("CC2_AUX", ";PeakADC;nEvents", 1152, -512., 4096.);
+  //   fFrameTop = new TH1D("TopFrame", ";PeakADC;nEvents", 1152, -512., 4096.);
+  //   fFrameBot = new TH1D("BotFrame", ";PeakADC;nEvents", 1152, -512., 4096.);
+  // }
 
-  fPS->SetLineColor(4);
-  fPS->SetLineWidth(2);
+  // fPS->SetLineColor(4);
+  // fPS->SetLineWidth(2);
 
-  fMC->SetLineColor(2);
-  fMC->SetLineWidth(2);
+  // fMC->SetLineColor(2);
+  // fMC->SetLineWidth(2);
 
-  fTC->SetLineColor(3);
-  fTC->SetLineWidth(2);
+  // fTC->SetLineColor(3);
+  // fTC->SetLineWidth(2);
 
-  fCC1->SetLineColor(802);
-  fCC1->SetLineWidth(2);
+  // fCC1->SetLineColor(802);
+  // fCC1->SetLineWidth(2);
 
-  fCC2->SetLineColor(418);
-  fCC2->SetLineWidth(2);
+  // fCC2->SetLineColor(418);
+  // fCC2->SetLineWidth(2);
 
-  fFrameTop->SetStats(0);
-  fFrameBot->SetStats(0);
+  // fFrameTop->SetStats(0);
+  // fFrameBot->SetStats(0);
 
-  fCanvas = new TCanvas("fCanvas_Aux", "fCanvas_Aux", 3300, 1500);
-  fCanvas->Divide(4, 2);
+  fCanvas = new TCanvas("fCanvas_Aux", "fCanvas_Aux", 2000, 1000);
+  fCanvas->Divide(2, 2);
 
   fCanvas->cd(1)->SetRightMargin(0.13);
   fCanvas->cd(2)->SetRightMargin(0.13);
-  fCanvas->cd(5)->SetRightMargin(0.13);
-  fCanvas->cd(6)->SetRightMargin(0.13);
+  fCanvas->cd(3)->SetRightMargin(0.13);
+  fCanvas->cd(4)->SetRightMargin(0.13);
 }
 
 void TBaux::SetParticle(std::string fParticle_) {
 
   fParticle = fParticle_;
 
-  if (fParticle == "PION") {
-    fCC1cut = fNodeAux["PION"]["CC1"].as<double>(); 
-    fCC2cut = fNodeAux["PION"]["CC2"].as<double>();
-    fPSInitCut = fNodeAux["PION"]["PS_INIT"].as<double>();
-    fPSFinCut = fNodeAux["PION"]["PS_FIN"].as<double>();
-  }
+  // if (fParticle == "PION") {
+  //   fCC1cut = fNodeAux["PION"]["CC1"].as<double>(); 
+  //   fCC2cut = fNodeAux["PION"]["CC2"].as<double>();
+  //   fPSInitCut = fNodeAux["PION"]["PS_INIT"].as<double>();
+  //   fPSFinCut = fNodeAux["PION"]["PS_FIN"].as<double>();
+  // }
 
-  if (fParticle == "KAON") {
-    fCC1cut = fNodeAux["KAON"]["CC1"].as<double>();
-    fCC2cut = fNodeAux["KAON"]["CC2"].as<double>();
-    fPSInitCut = fNodeAux["KAON"]["PS_INIT"].as<double>();
-    fPSFinCut = fNodeAux["KAON"]["PS_FIN"].as<double>();
-  }
+  // if (fParticle == "KAON") {
+  //   fCC1cut = fNodeAux["KAON"]["CC1"].as<double>();
+  //   fCC2cut = fNodeAux["KAON"]["CC2"].as<double>();
+  //   fPSInitCut = fNodeAux["KAON"]["PS_INIT"].as<double>();
+  //   fPSFinCut = fNodeAux["KAON"]["PS_FIN"].as<double>();
+  // }
 
-  if (fParticle == "PROTON") {
-    fCC1cut = fNodeAux["PROTON"]["CC1"].as<double>();
-    fCC2cut = fNodeAux["PROTON"]["CC2"].as<double>();
-    fPSInitCut = fNodeAux["PROTON"]["PS_INIT"].as<double>();
-    fPSFinCut = fNodeAux["PROTON"]["PS_FIN"].as<double>();
-  }
+  // if (fParticle == "PROTON") {
+  //   fCC1cut = fNodeAux["PROTON"]["CC1"].as<double>();
+  //   fCC2cut = fNodeAux["PROTON"]["CC2"].as<double>();
+  //   fPSInitCut = fNodeAux["PROTON"]["PS_INIT"].as<double>();
+  //   fPSFinCut = fNodeAux["PROTON"]["PS_FIN"].as<double>();
+  // }
 }
 
 void TBaux::SetRange(const YAML::Node tConfigNode) {
 
-  fRangeMap.insert(std::make_pair("DWC2R", tConfigNode["DWC2R"].as<std::vector<int>>()));
-  fRangeMap.insert(std::make_pair("PS", tConfigNode["PS"].as<std::vector<int>>()));
-  fRangeMap.insert(std::make_pair("MC", tConfigNode["MC"].as<std::vector<int>>()));
-  fRangeMap.insert(std::make_pair("TC", tConfigNode["TC"].as<std::vector<int>>()));
-  fRangeMap.insert(std::make_pair("CC1", tConfigNode["CC1"].as<std::vector<int>>()));
-  fRangeMap.insert(std::make_pair("CC2", tConfigNode["CC2"].as<std::vector<int>>()));
+  // fRangeMap.insert(std::make_pair("DWC2R", tConfigNode["DWC2R"].as<std::vector<int>>()));
+  // fRangeMap.insert(std::make_pair("PS", tConfigNode["PS"].as<std::vector<int>>()));
+  // fRangeMap.insert(std::make_pair("MC", tConfigNode["MC"].as<std::vector<int>>()));
+  // fRangeMap.insert(std::make_pair("TC", tConfigNode["TC"].as<std::vector<int>>()));
+  // fRangeMap.insert(std::make_pair("CC1", tConfigNode["CC1"].as<std::vector<int>>()));
+  // fRangeMap.insert(std::make_pair("CC2", tConfigNode["CC2"].as<std::vector<int>>()));
 }
 
 double TBaux::GetPeakADC(std::vector<short> waveform, int xInit, int xFin) {
@@ -219,11 +219,11 @@ void TBaux::Fill(TBevt<TBwaveform> anEvent) {
   fDWCXaxis->Fill(posVec.at(0), posVec.at(2));
   fDWCYaxis->Fill(posVec.at(1), posVec.at(3));
 
-  fPS->Fill(GetValue(anEvent.GetData(fUtility.GetCID("PS")).waveform(), fRangeMap.at("PS").at(0), fRangeMap.at("PS").at(1)));
-  fMC->Fill(GetValue(anEvent.GetData(fUtility.GetCID("MC")).waveform(), fRangeMap.at("MC").at(0), fRangeMap.at("MC").at(1)));
-  fTC->Fill(GetValue(anEvent.GetData(fUtility.GetCID("TC")).waveform(), fRangeMap.at("TC").at(0), fRangeMap.at("TC").at(1)));
-  fCC1->Fill(GetValue(anEvent.GetData(fUtility.GetCID("CC1")).waveform(), fRangeMap.at("CC1").at(0), fRangeMap.at("CC1").at(1)));
-  fCC2->Fill(GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)));
+  // fPS->Fill(GetValue(anEvent.GetData(fUtility.GetCID("PS")).waveform(), fRangeMap.at("PS").at(0), fRangeMap.at("PS").at(1)));
+  // fMC->Fill(GetValue(anEvent.GetData(fUtility.GetCID("MC")).waveform(), fRangeMap.at("MC").at(0), fRangeMap.at("MC").at(1)));
+  // fTC->Fill(GetValue(anEvent.GetData(fUtility.GetCID("TC")).waveform(), fRangeMap.at("TC").at(0), fRangeMap.at("TC").at(1)));
+  // fCC1->Fill(GetValue(anEvent.GetData(fUtility.GetCID("CC1")).waveform(), fRangeMap.at("CC1").at(0), fRangeMap.at("CC1").at(1)));
+  // fCC2->Fill(GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)));
 }
 
 bool TBaux::IsPassing(TBevt<TBwaveform> anEvent) {
@@ -259,50 +259,50 @@ bool TBaux::IsPassing(TBevt<TBwaveform> anEvent) {
   if ( std::abs(posVec.at(1) - posVec.at(3)) > fDWCCorr )
     return false;
 
-  if (fMCcut < GetValue(anEvent.GetData(fUtility.GetCID("MC")).waveform(), fRangeMap.at("MC").at(0), fRangeMap.at("MC").at(1)))
-    return false;
+  // if (fMCcut < GetValue(anEvent.GetData(fUtility.GetCID("MC")).waveform(), fRangeMap.at("MC").at(0), fRangeMap.at("MC").at(1)))
+  //   return false;
 
-    // - pion: (CC1, CC2) = (pedestal, signal) 선택
-    // - kaon: (CC1, CC2) = (pedestal, signal) 선택
-    // - proton: (CC1, CC2) = (안씀, pedestal) 선택
-    // 셋 다 구현이 되면 좋고, 안되면 pion proton만 되어도 좋습니다. 하나만 되면 pion으로 하고요.
+  //   // - pion: (CC1, CC2) = (pedestal, signal) 선택
+  //   // - kaon: (CC1, CC2) = (pedestal, signal) 선택
+  //   // - proton: (CC1, CC2) = (안씀, pedestal) 선택
+  //   // 셋 다 구현이 되면 좋고, 안되면 pion proton만 되어도 좋습니다. 하나만 되면 pion으로 하고요.
   
-  double tIntADC_PS = GetValue(anEvent.GetData(fUtility.GetCID("PS")).waveform(), fRangeMap.at("PS").at(0), fRangeMap.at("PS").at(1));
-  if (fParticle == "PION") {
+  // double tIntADC_PS = GetValue(anEvent.GetData(fUtility.GetCID("PS")).waveform(), fRangeMap.at("PS").at(0), fRangeMap.at("PS").at(1));
+  // if (fParticle == "PION") {
   
-    if ( !(fPSInitCut < tIntADC_PS && tIntADC_PS < fPSFinCut) )
-      return false;
+  //   if ( !(fPSInitCut < tIntADC_PS && tIntADC_PS < fPSFinCut) )
+  //     return false;
 
-    if (fCC1cut < GetValue(anEvent.GetData(fUtility.GetCID("CC1")).waveform(), fRangeMap.at("CC1").at(0), fRangeMap.at("CC1").at(1)))
-      return false;
+  //   if (fCC1cut < GetValue(anEvent.GetData(fUtility.GetCID("CC1")).waveform(), fRangeMap.at("CC1").at(0), fRangeMap.at("CC1").at(1)))
+  //     return false;
 
-    if (fCC2cut > GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)))
-      return false;
+  //   if (fCC2cut > GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)))
+  //     return false;
 
-  } else if (fParticle == "KAON") {
+  // } else if (fParticle == "KAON") {
 
-    if ( !(fPSInitCut < tIntADC_PS && tIntADC_PS < fPSFinCut) )
-      return false;
+  //   if ( !(fPSInitCut < tIntADC_PS && tIntADC_PS < fPSFinCut) )
+  //     return false;
 
-    if (fCC1cut < GetValue(anEvent.GetData(fUtility.GetCID("CC1")).waveform(), fRangeMap.at("CC1").at(0), fRangeMap.at("CC1").at(1)))
-      return false;
+  //   if (fCC1cut < GetValue(anEvent.GetData(fUtility.GetCID("CC1")).waveform(), fRangeMap.at("CC1").at(0), fRangeMap.at("CC1").at(1)))
+  //     return false;
 
-    if (fCC2cut > GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)))
-      return false;
+  //   if (fCC2cut > GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)))
+  //     return false;
 
-  } else if (fParticle == "PROTON") {
+  // } else if (fParticle == "PROTON") {
     
-    if ( !(fPSInitCut < tIntADC_PS && tIntADC_PS < fPSFinCut) )
-      return false;
+  //   if ( !(fPSInitCut < tIntADC_PS && tIntADC_PS < fPSFinCut) )
+  //     return false;
 
-    if (fCC2cut < GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)))
-      return false;
+  //   if (fCC2cut < GetValue(anEvent.GetData(fUtility.GetCID("CC2")).waveform(), fRangeMap.at("CC2").at(0), fRangeMap.at("CC2").at(1)))
+  //     return false;
 
-  } else {
+  // } else {
 
-    if (fPScut > GetValue(anEvent.GetData(fUtility.GetCID("PS")).waveform(), fRangeMap.at("PS").at(0), fRangeMap.at("PS").at(1)))
-      return false;
-  }
+  //   if (fPScut > GetValue(anEvent.GetData(fUtility.GetCID("PS")).waveform(), fRangeMap.at("PS").at(0), fRangeMap.at("PS").at(1)))
+  //     return false;
+  // }
 
   return true;
 }
@@ -312,27 +312,27 @@ void TBaux::Draw() {
   fCanvas->cd(1);
   fDWC1->Draw("colz");
 
-  fCanvas->cd(5);
+  fCanvas->cd(2);
   fDWC2->Draw("colz");
 
-  fCanvas->cd(2);
+  fCanvas->cd(3);
   fDWCXaxis->Draw("colz");
 
-  fCanvas->cd(6);
+  fCanvas->cd(4);
   fDWCYaxis->Draw("colz");
 
-  fCanvas->cd(3);
-  fPS->Draw("Hist");
+  // fCanvas->cd(3);
+  // fPS->Draw("Hist");
 
-  fCanvas->cd(4);
-  fMC->Draw("Hist");
+  // fCanvas->cd(4);
+  // fMC->Draw("Hist");
 
-  fCanvas->cd(7);
-  fTC->Draw("Hist");
+  // fCanvas->cd(7);
+  // fTC->Draw("Hist");
 
-  fCanvas->cd(8);
-  fCC1->Draw("Hist");
-  fCC2->Draw("Hist sames");
+  // fCanvas->cd(8);
+  // fCC1->Draw("Hist");
+  // fCC2->Draw("Hist sames");
 
   // gSystem->ProcessEvents();
   gSystem->Sleep(1000);
@@ -352,8 +352,8 @@ void TBaux::SetMaximum() {
   // if (fPS->GetMaximum() > fMC->GetMaximum()) fFrameTop->GetYaxis()->SetRangeUser(0., fPS->GetMaximum() * 1.2);
   // else                                       fFrameTop->GetYaxis()->SetRangeUser(0., fMC->GetMaximum() * 1.2);
 
-  if (fCC1->GetMaximum() > fCC2->GetMaximum()) fFrameBot->GetYaxis()->SetRangeUser(0., fCC1->GetMaximum() * 1.2);
-  else                                         fFrameBot->GetYaxis()->SetRangeUser(0., fCC2->GetMaximum() * 1.2);
+  // if (fCC1->GetMaximum() > fCC2->GetMaximum()) fFrameBot->GetYaxis()->SetRangeUser(0., fCC1->GetMaximum() * 1.2);
+  // else                                         fFrameBot->GetYaxis()->SetRangeUser(0., fCC2->GetMaximum() * 1.2);
 }
 
 void TBaux::Update() {
@@ -363,53 +363,53 @@ void TBaux::Update() {
   fCanvas->cd(1);
   fDWC1->Draw("colz");
 
-  fCanvas->cd(5);
+  fCanvas->cd(2);
   fDWC2->Draw("colz");
 
-  fCanvas->cd(2);
+  fCanvas->cd(3);
   fDWCXaxis->Draw("colz");
 
-  fCanvas->cd(6);
+  fCanvas->cd(4);
   fDWCYaxis->Draw("colz");
 
-  fCanvas->cd(3);
-  fPS->Draw("Hist");
+  // fCanvas->cd(3);
+  // fPS->Draw("Hist");
 
-  fCanvas->cd(4);
-  fMC->Draw("Hist");
+  // fCanvas->cd(4);
+  // fMC->Draw("Hist");
 
-  fCanvas->cd(7);
-  fTC->Draw("Hist");
+  // fCanvas->cd(7);
+  // fTC->Draw("Hist");
 
-  fCanvas->cd(8);
-  fCC1->Draw("Hist");
-  fCC2->Draw("Hist sames");
+  // fCanvas->cd(8);
+  // fCC1->Draw("Hist");
+  // fCC2->Draw("Hist sames");
 
 
-  fCanvas->cd(8);
-  fFrameBot->Draw("");
+  // fCanvas->cd(8);
+  // fFrameBot->Draw("");
 
-  fCanvas->cd(8);
-  fCC1->Draw("Hist sames");
-  if (fIsFirst) {
-    fCanvas->Update();
-    TPaveStats* stat = (TPaveStats*)fCC1->FindObject("stats");
-    stat->SetTextColor(fCC1->GetLineColor());
-    stat->SetY2NDC(1.);
-    stat->SetY1NDC(.8);
-    stat->SaveStyle();
-  }
+  // fCanvas->cd(8);
+  // fCC1->Draw("Hist sames");
+  // if (fIsFirst) {
+  //   fCanvas->Update();
+  //   TPaveStats* stat = (TPaveStats*)fCC1->FindObject("stats");
+  //   stat->SetTextColor(fCC1->GetLineColor());
+  //   stat->SetY2NDC(1.);
+  //   stat->SetY1NDC(.8);
+  //   stat->SaveStyle();
+  // }
 
-  fCanvas->cd(8);
-  fCC2->Draw("Hist sames");
-  if (fIsFirst) {
-    fCanvas->Update();
-    TPaveStats* stat = (TPaveStats*)fCC2->FindObject("stats");
-    stat->SetTextColor(fCC2->GetLineColor());
-    stat->SetY2NDC(.8);
-    stat->SetY1NDC(.6);
-    stat->SaveStyle();
-  }
+  // fCanvas->cd(8);
+  // fCC2->Draw("Hist sames");
+  // if (fIsFirst) {
+  //   fCanvas->Update();
+  //   TPaveStats* stat = (TPaveStats*)fCC2->FindObject("stats");
+  //   stat->SetTextColor(fCC2->GetLineColor());
+  //   stat->SetY2NDC(.8);
+  //   stat->SetY1NDC(.6);
+  //   stat->SaveStyle();
+  // }
 
 
   if (fIsFirst) fIsFirst = false;
@@ -456,10 +456,10 @@ void TBaux::SaveAs(TString output) {
   fDWCXaxis->Write();
   fDWCYaxis->Write();
 
-  fPS->Write();
-  fMC->Write();
-  fCC1->Write();
-  fCC2->Write();
+  // fPS->Write();
+  // fMC->Write();
+  // fCC1->Write();
+  // fCC2->Write();
 
   outoutFile->Close();
 }

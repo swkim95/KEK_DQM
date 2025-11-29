@@ -1,0 +1,23 @@
+Initializing model
+Loading checkpoint shards:   0%|          | 0/2 [00:00<?, ?it/s]Loading checkpoint shards:  50%|█████     | 1/2 [00:00<00:00,  1.32it/s]Loading checkpoint shards: 100%|██████████| 2/2 [00:02<00:00,  1.42s/it]Loading checkpoint shards: 100%|██████████| 2/2 [00:02<00:00,  1.32s/it]
+Device set to use mps:0
+Pipeline initialized.
+🚀 웹 서버를 시작합니다...
+============================================================
+🚀 AI Physicist 서버가 시작되었습니다!
+============================================================
+📱 로컬 접속: http://localhost:5001
+🌐 네트워크 접속: http://192.168.0.6:5001
+============================================================
+ * Serving Flask app 'agent'
+ * Debug mode: off
+WARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.
+ * Running on all addresses (0.0.0.0)
+ * Running on http://127.0.0.1:5001
+ * Running on http://192.168.0.6:5001
+Press CTRL+C to quit
+192.168.0.10 - - [28/Nov/2025 23:21:32] "GET / HTTP/1.1" 200 -
+192.168.0.10 - - [28/Nov/2025 23:21:32] "GET /?_t=1764339692750_i59fohkvv HTTP/1.1" 200 -
+192.168.0.10 - - [28/Nov/2025 23:22:32] "POST /api/chat HTTP/1.1" 200 -
+/Library/Frameworks/Python.framework/Versions/3.13/lib/python3.13/multiprocessing/resource_tracker.py:277: UserWarning: resource_tracker: There appear to be 1 leaked semaphore objects to clean up at shutdown: {'/loky-13930-f4tyuqbs'}
+  warnings.warn(

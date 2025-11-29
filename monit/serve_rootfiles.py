@@ -8,14 +8,39 @@ import json
 import fcntl
 import select
 import threading
+import shlex
+from datetime import datetime
+
+import paramiko
 from flask import Flask, request, Response, jsonify, send_from_directory, send_file
+from flask_cors import CORS
 
 # 현재 실행되는 파이썬 파일의 디렉토리를 기준으로 절대경로 생성
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.join(BASE_DIR, "output")
 INDEX_DIR = BASE_DIR
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
+
+TOOLS_DIR = os.path.join(PROJECT_ROOT, "tools")
+if TOOLS_DIR not in sys.path:
+    sys.path.append(TOOLS_DIR)
+
+DEFAULT_HV_SSH_CONFIG = {
+    'host': '192.168.0.12',
+    'port': 22,
+    'username': 'yoolab',
+    'password': '37326',
+    'key_path': None,
+}
+
+try:
+    from hvcontrol import HV_SSH_CONFIG as IMPORTED_HV_SSH_CONFIG  # type: ignore
+    HV_MONITOR_SSH_CONFIG = IMPORTED_HV_SSH_CONFIG or DEFAULT_HV_SSH_CONFIG
+except Exception:
+    HV_MONITOR_SSH_CONFIG = DEFAULT_HV_SSH_CONFIG
 
 app = Flask(__name__)
+CORS(app)  # CORS 활성화 (Agent 창에서 API 호출 허용)
 
 # 환경변수 관리를 위한 전역 변수
 ENV_INITIALIZED = False
@@ -24,6 +49,121 @@ CUSTOM_ENV = os.environ.copy()
 # 실행 중인 프로세스 추적
 current_process = None
 process_lock = threading.Lock()
+
+# 백그라운드 anomaly detection 프로세스 추적
+anomaly_detection_processes = {}  # {run_number: subprocess}
+anomaly_lock = threading.Lock()
+
+# AI Agent 프로세스 추적
+agent_process = None
+agent_lock = threading.Lock()
+
+# HV Monitor 상태
+hv_monitor_client = None
+hv_monitor_lock = threading.Lock()
+HV_MONITOR_WORKING_DIR = "/home/yoolab/Downloads/CAENHVWrapper-6.6/HVWrapperDemo"
+HV_MONITOR_STATUS_COMMAND = "./HVWrappdemo --ch all --get Status"
+HV_MONITOR_MODE_COMMANDS = {
+    'vmon': "./HVWrappdemo --ch all --VMon",
+    'imon': "./HVWrappdemo --ch all --IMon",
+}
+HV_MONITOR_DEFAULT_COMMAND = HV_MONITOR_MODE_COMMANDS['imon']
+HV_MONITOR_PRE_COMMAND = "export LD_LIBRARY_PATH=/usr/lib64/:$LD_LIBRARY_PATH"
+
+
+def ensure_hv_monitor_client():
+    """HV 모니터용 SSH 클라이언트를 확보합니다."""
+    global hv_monitor_client
+    with hv_monitor_lock:
+        # 기존 연결이 살아있는지 확인
+        if hv_monitor_client:
+            try:
+                transport = hv_monitor_client.get_transport()
+                if transport and transport.is_active():
+                    return hv_monitor_client
+            except Exception:
+                pass
+            # 비정상인 경우 정리
+            try:
+                hv_monitor_client.close()
+            except Exception:
+                pass
+            hv_monitor_client = None
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+        try:
+            if HV_MONITOR_SSH_CONFIG.get('key_path'):
+                key = paramiko.RSAKey.from_private_key_file(HV_MONITOR_SSH_CONFIG['key_path'])
+                client.connect(
+                    hostname=HV_MONITOR_SSH_CONFIG['host'],
+                    port=HV_MONITOR_SSH_CONFIG.get('port', 22),
+                    username=HV_MONITOR_SSH_CONFIG['username'],
+                    pkey=key,
+                    timeout=10
+                )
+            else:
+                client.connect(
+                    hostname=HV_MONITOR_SSH_CONFIG['host'],
+                    port=HV_MONITOR_SSH_CONFIG.get('port', 22),
+                    username=HV_MONITOR_SSH_CONFIG['username'],
+                    password=HV_MONITOR_SSH_CONFIG.get('password'),
+                    timeout=10
+                )
+        except Exception as exc:
+            raise RuntimeError(f"HV 모니터 SSH 연결 실패: {exc}") from exc
+
+        hv_monitor_client = client
+
+        return hv_monitor_client
+
+
+def close_hv_monitor_client():
+    """HV 모니터용 SSH 연결을 닫습니다."""
+    global hv_monitor_client
+    with hv_monitor_lock:
+        if hv_monitor_client:
+            try:
+                hv_monitor_client.close()
+            except Exception:
+                pass
+            hv_monitor_client = None
+
+
+def run_hv_monitor_command(command: str):
+    """윈도우 노트북으로 HVWrappdemo 명령을 전달하고 결과를 반환합니다."""
+    cmd = (command or HV_MONITOR_DEFAULT_COMMAND).strip()
+    if not cmd:
+        cmd = HV_MONITOR_DEFAULT_COMMAND
+
+    last_error = None
+    for _ in range(2):
+        try:
+            client = ensure_hv_monitor_client()
+            command_segments = []
+            if HV_MONITOR_WORKING_DIR:
+                command_segments.append(f"cd {shlex.quote(HV_MONITOR_WORKING_DIR)}")
+            if HV_MONITOR_PRE_COMMAND:
+                command_segments.append(HV_MONITOR_PRE_COMMAND)
+            command_segments.append(cmd)
+            combined = " && ".join(command_segments)
+            remote_cmd = f"bash -lc {shlex.quote(combined)}"
+            stdin, stdout, stderr = client.exec_command(remote_cmd)
+            output = stdout.read().decode('utf-8', errors='ignore').strip()
+            error = stderr.read().decode('utf-8', errors='ignore').strip()
+            success = len(error) == 0
+            return {
+                'command': cmd,
+                'stdout': output,
+                'stderr': error,
+                'success': success
+            }
+        except Exception as exc:
+            last_error = str(exc)
+            close_hv_monitor_client()
+
+    raise RuntimeError(last_error or "HV 모니터 명령 실행 실패")
 
 def parse_envset_sh():
     """envset.sh 파일을 파싱하여 환경변수를 추출합니다."""
@@ -397,15 +537,29 @@ def list_root_files():
     try:
         files_info = []
         for f in os.listdir(ROOT_DIR):
-            # ROOT 파일과 GIF 파일 모두 포함
-            if f.endswith((".root", ".gif")):
+            # anomaly_live 관련 JSON/LOG 파일은 제외 (내부용)
+            if 'anomaly_live.json' in f or 'anomaly_live.log' in f:
+                continue
+            
+            # ROOT 파일, GIF 파일, JSON 파일, PNG 파일 모두 포함
+            if f.endswith((".root", ".gif", ".json", ".png")):
                 file_path = os.path.join(ROOT_DIR, f)
                 if os.path.exists(file_path):
                     # Get file creation/modification time
                     stat = os.stat(file_path)
                     # Use modification time (mtime) as it's more reliable than creation time
                     modification_time = stat.st_mtime
-                    file_type = "gif" if f.endswith(".gif") else "root"
+                    
+                    # Determine file type
+                    if f.endswith(".gif"):
+                        file_type = "gif"
+                    elif f.endswith(".json"):
+                        file_type = "json"
+                    elif f.endswith(".png"):
+                        file_type = "png"
+                    else:
+                        file_type = "root"
+                    
                     files_info.append({
                         'name': f,
                         'mtime': modification_time,
@@ -420,10 +574,78 @@ def list_root_files():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# HV 모니터 페이지
+@app.route('/hv-monitor')
+def hv_monitor_page():
+    return send_from_directory(INDEX_DIR, 'hv_monitor.html')
+
+
 # 정적 파일들을 서빙하는 라우트 추가
 @app.route('/<path:filename>')
 def serve_static_files(filename):
     return send_from_directory(INDEX_DIR, filename)
+
+
+@app.route('/hv-monitor/status', methods=['GET'])
+def hv_monitor_status():
+    """HVWrappdemo 명령을 실행하여 실시간 측정값과 상태를 반환합니다."""
+    requested_mode = request.args.get('mode', 'vmon').strip().lower()
+    measurement_command = request.args.get('command')
+    hv_log_dir = os.path.join(os.path.dirname(BASE_DIR), 'logs')
+    os.makedirs(hv_log_dir, exist_ok=True)
+    hv_log_path = os.path.join(hv_log_dir, 'hv_monitor.log')
+
+    def log_execution(entry):
+        with open(hv_log_path, 'a') as log_file:
+            log_file.write(json.dumps(entry, ensure_ascii=False) + '\n')
+
+    if not measurement_command:
+        measurement_command = HV_MONITOR_MODE_COMMANDS.get(requested_mode, HV_MONITOR_DEFAULT_COMMAND)
+    else:
+        measurement_command = measurement_command.strip() or HV_MONITOR_DEFAULT_COMMAND
+
+    timestamp = datetime.utcnow().isoformat() + 'Z'
+
+    try:
+        status_result = run_hv_monitor_command(HV_MONITOR_STATUS_COMMAND)
+        measurement_result = run_hv_monitor_command(measurement_command)
+
+        log_entry = {
+            'timestamp': timestamp,
+            'mode': requested_mode,
+            'status_command': HV_MONITOR_STATUS_COMMAND,
+            'measurement_command': measurement_command,
+            'status': status_result,
+            'measurement': measurement_result
+        }
+        log_execution(log_entry)
+
+        return jsonify({
+            'success': status_result['success'] and measurement_result['success'],
+            'mode': requested_mode if requested_mode in HV_MONITOR_MODE_COMMANDS else 'custom',
+            'timestamp': timestamp,
+            'status': status_result,
+            'measurement': measurement_result
+        })
+    except Exception as exc:
+        error_entry = {
+            'timestamp': timestamp,
+            'mode': requested_mode,
+            'measurement_command': measurement_command,
+            'error': str(exc)
+        }
+        log_execution(error_entry)
+        return jsonify({
+            'success': False,
+            'error': str(exc)
+        }), 500
+
+
+@app.route('/hv-monitor/disconnect', methods=['POST'])
+def hv_monitor_disconnect():
+    """HV 모니터링 연결을 종료합니다."""
+    close_hv_monitor_client()
+    return jsonify({'success': True})
 
 # 명령어 실행 API 추가
 @app.route('/execute', methods=['POST'])
@@ -455,6 +677,150 @@ def execute_command():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# Anomaly Detection 실행 API
+def execute_anomaly_detection(command):
+    """
+    Anomaly detection 실행 - detect_run.py 호출
+    명령어에서 --RunNumber, --module (tower), --type 등을 파싱
+    """
+    try:
+        # 명령어 파싱
+        parts = command.split()
+        run_number = None
+        towers_input = None
+        type_val = None
+        
+        for i, part in enumerate(parts):
+            if part == '--RunNumber' and i + 1 < len(parts):
+                run_number = parts[i + 1]
+            elif part == '--towers' and i + 1 < len(parts):
+                towers_input = parts[i + 1]
+            elif part == '--type' and i + 1 < len(parts):
+                type_val = parts[i + 1]
+        
+        if not run_number:
+            return "data: " + json.dumps({'type': 'error', 'content': 'Run number not specified'}) + "\n\n", 400
+        
+        # Tower 리스트 결정
+        # --towers가 지정되면 해당 tower들 사용, 아니면 모든 tower (T1 ~ T9)
+        if towers_input:
+            # towers_input: "T1,T2,T3" 또는 "T1-C" 형식
+            # 쉼표로 분리된 경우 각각 tower 추출
+            tower_list = []
+            for tower_item in towers_input.split(','):
+                tower_item = tower_item.strip()
+                # "-C" 또는 "-S" 제거하여 tower 이름만 추출
+                tower_name = tower_item.split('-')[0] if '-' in tower_item else tower_item
+                if tower_name and tower_name not in tower_list:
+                    tower_list.append(tower_name)
+            towers = tower_list if tower_list else ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9']
+        else:
+            # 모든 tower 사용
+            towers = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9']
+        
+        tower_str = ','.join(towers)
+        
+        def generate():
+            yield f"data: {json.dumps({'type': 'output', 'content': '🔍 Starting Anomaly Detection...'})}\n\n"
+            yield f"data: {json.dumps({'type': 'output', 'content': f'Run Number: {run_number}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'output', 'content': f'Towers: {tower_str}'})}\n\n"
+            yield f"data: {json.dumps({'type': 'output', 'content': ''})}\n\n"
+            
+            # detect_run.py 경로
+            detect_script = os.path.join(os.path.dirname(BASE_DIR), 'anomaly', 'detect_run.py')
+            
+            if not os.path.exists(detect_script):
+                yield f"data: {json.dumps({'type': 'error', 'content': f'Anomaly detection script not found: {detect_script}'})}\n\n"
+                return
+            
+            # Python 명령어 구성
+            python_cmd = f"cd {os.path.dirname(BASE_DIR)}/anomaly && python3 detect_run.py --run {run_number} --towers {tower_str} --output {os.path.join(BASE_DIR, 'output')}"
+            
+            yield f"data: {json.dumps({'type': 'command', 'content': f'$ {python_cmd}'})}\n\n"
+            
+            global current_process
+            
+            try:
+                with process_lock:
+                    current_process = subprocess.Popen(
+                        python_cmd,
+                        shell=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True,
+                        bufsize=1,
+                        universal_newlines=True,
+                        cwd=os.path.dirname(BASE_DIR),
+                        env=CUSTOM_ENV
+                    )
+                
+                # 실시간 출력 스트리밍
+                buffer = ""
+                
+                while True:
+                    if current_process.poll() is not None:
+                        break
+                    
+                    try:
+                        char = current_process.stdout.read(1)
+                        if not char:
+                            continue
+                        
+                        buffer += char
+                        
+                        if char == '\n':
+                            if buffer and buffer.strip():
+                                content = buffer.rstrip('\n')
+                                yield f"data: {json.dumps({'type': 'output', 'content': content})}\n\n"
+                            buffer = ""
+                        elif len(buffer) > 1000:
+                            yield f"data: {json.dumps({'type': 'output', 'content': buffer})}\n\n"
+                            buffer = ""
+                            
+                    except Exception as e:
+                        break
+                
+                # 남은 버퍼 전송
+                if buffer:
+                    yield f"data: {json.dumps({'type': 'output', 'content': buffer})}\n\n"
+                
+                # 프로세스 완료 대기
+                current_process.wait()
+                
+                # 완료 알림
+                if current_process.returncode == 0:
+                    yield f"data: {json.dumps({'type': 'complete', 'content': '✅ Anomaly detection completed successfully!'})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'error', 'content': f'❌ Anomaly detection failed with exit code: {current_process.returncode}'})}\n\n"
+                
+                # 프로세스 정리
+                with process_lock:
+                    current_process = None
+                
+            except Exception as e:
+                yield f"data: {json.dumps({'type': 'error', 'content': f'Error running anomaly detection: {str(e)}'})}\n\n"
+                with process_lock:
+                    if current_process:
+                        try:
+                            current_process.terminate()
+                        except:
+                            pass
+                        current_process = None
+        
+        return Response(
+            generate(),
+            mimetype='text/event-stream',
+            headers={
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type'
+            }
+        )
+        
+    except Exception as e:
+        return "data: " + json.dumps({'type': 'error', 'content': str(e)}) + "\n\n", 500
+
 # 실시간 명령어 실행 API (스트리밍)
 @app.route('/execute_stream', methods=['GET'])
 def execute_stream():
@@ -471,13 +837,209 @@ def execute_stream():
         if command_parts and command_parts[0] in forbidden_commands:
             return "data: " + json.dumps({'type': 'error', 'content': f'Command not allowed for security reasons. Forbidden: {", ".join(forbidden_commands)}'}) + "\n\n", 403
         
+        # Check if --Anomaly flag is present
+        has_anomaly = '--Anomaly' in command
+        
+        # monit 실행용 명령어 (--Anomaly, --towers 제거)
+        monit_command = command
+        anomaly_towers = None
+        run_number = None
+        
+        # Parse command
+        parts = command.split()
+        for i, part in enumerate(parts):
+            if part == '--towers' and i + 1 < len(parts):
+                anomaly_towers = parts[i + 1]
+            elif part == '--RunNumber' and i + 1 < len(parts):
+                run_number = parts[i + 1]
+        
+        if has_anomaly:
+            # --Anomaly와 --towers 제거
+            monit_command = command.replace('--Anomaly', '').strip()
+            if anomaly_towers:
+                monit_command = monit_command.replace(f'--towers {anomaly_towers}', '').strip()
+        
         def generate():
+            nonlocal run_number, anomaly_towers
+            
             # 환경변수가 초기화되지 않았다면 초기화 시도
             if not ENV_INITIALIZED:
                 success, message = parse_envset_sh()
                 if not success:
                     yield f"data: {json.dumps({'type': 'error', 'content': f'Environment not initialized: {message}'})}\n\n"
                     return
+            
+            # Anomaly detection: 백그라운드로 anomaly detection 시작 (LIVE 여부 무관)
+            anomaly_thread = None
+            if has_anomaly and run_number:
+                def run_live_anomaly_detection():
+                    """백그라운드에서 anomaly detection 실행"""
+                    # 즉시 이전 결과 파일 삭제 (빠른 연속 실행 대비)
+                    output_json = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_live.json')
+                    log_file = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_live.log')
+                    # Anomaly와 Normal PNG 둘 다 삭제
+                    png_anomaly_c = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_C.png')
+                    png_anomaly_s = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_S.png')
+                    png_normal_c = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_normal_C.png')
+                    png_normal_s = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_normal_S.png')
+                    
+                    for f in [output_json, log_file, png_anomaly_c, png_anomaly_s, png_normal_c, png_normal_s]:
+                        if os.path.exists(f):
+                            try:
+                                os.remove(f)
+                            except:
+                                pass
+                    
+                    # 0.dat 파일이 생성될 때까지 대기
+                    # Tower 정보로 MID 찾기 위한 준비
+                    import pandas as pd
+                    
+                    # 최신 anomaly 매핑 (mapping_KEK_anomaly.csv) 사용
+                    mapping_path = os.path.join(os.path.dirname(BASE_DIR), 'mapping', 'mapping_KEK_anomaly.csv')
+                    if not os.path.exists(mapping_path):
+                        return
+                    
+                    try:
+                        mapping_df = pd.read_csv(mapping_path)
+                    except:
+                        return
+                    
+                    # Tower 리스트에서 첫 번째 tower의 MID 찾기
+                    if anomaly_towers:
+                        tower_list = []
+                        for tower_item in anomaly_towers.split(','):
+                            tower_item = tower_item.strip()
+                            tower_name = tower_item.split('-')[0] if '-' in tower_item else tower_item
+                            if tower_name and tower_name not in tower_list:
+                                tower_list.append(tower_name)
+                        towers = tower_list if tower_list else ['T1']
+                    else:
+                        towers = ['T1']
+                    
+                    # 첫 번째 tower의 C 채널로 파일 체크
+                    first_tower = towers[0]
+                    full_tower_name = f"{first_tower}-C"
+                    matching_rows = mapping_df[mapping_df['pmt'].astype(str).str.strip() == full_tower_name.strip()]
+                    
+                    if len(matching_rows) == 0:
+                        return
+                    
+                    mid = int(matching_rows.iloc[0]['mid'])
+                    
+                    # 0.dat 파일 경로
+                    data_dir = "/Volumes/SSD_8TB"  # detect_live.py와 동일
+                    target_file_pattern = os.path.join(data_dir, 
+                                                      f"Run_{run_number}/Run_{run_number}_Wave/Run_{run_number}_Wave_MID_{mid}/Run_{run_number}_Wave_MID_{mid}_FILE_0.dat")
+                    
+                    # 파일이 생성되고 충분한 크기가 될 때까지 대기 (최대 60초)
+                    max_wait = 60
+                    wait_interval = 1
+                    elapsed = 0
+                    min_file_size = 64 + 32736*2 * 100  # 최소 100 이벤트
+                    
+                    while elapsed < max_wait:
+                        if os.path.exists(target_file_pattern):
+                            file_size = os.path.getsize(target_file_pattern)
+                            if file_size >= min_file_size:
+                                # 파일이 충분히 크면 detection 시작
+                                break
+                        time.sleep(wait_interval)
+                        elapsed += wait_interval
+                    
+                    # 파일이 없으면 종료
+                    if not os.path.exists(target_file_pattern):
+                        return
+                    
+                    # Tower 리스트 결정
+                    if anomaly_towers:
+                        tower_list = []
+                        for tower_item in anomaly_towers.split(','):
+                            tower_item = tower_item.strip()
+                            tower_name = tower_item.split('-')[0] if '-' in tower_item else tower_item
+                            if tower_name and tower_name not in tower_list:
+                                tower_list.append(tower_name)
+                        towers = tower_list if tower_list else ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9']
+                    else:
+                        towers = ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'T8', 'T9']
+                    
+                    tower_str = ','.join(towers)
+                    
+                    # detect_live.py 경로
+                    detect_script = os.path.join(os.path.dirname(BASE_DIR), 'anomaly', 'detect_live.py')
+                    output_json = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_live.json')
+                    log_file = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_live.log')
+                    
+                    # Execute 버튼을 누르면 항상 재실행 - 이전 결과 파일 삭제
+                    if os.path.exists(output_json):
+                        os.remove(output_json)
+                    if os.path.exists(log_file):
+                        os.remove(log_file)
+                    # PNG는 덮어쓰기되므로 삭제 불필요
+                    
+                    # 항상 Detection 실행
+                    if os.path.exists(detect_script):
+                        # 모델과 매핑 경로 설정
+                        model_dir = os.path.join(os.path.dirname(BASE_DIR), 'anomaly')
+                        mapping_file = os.path.join(os.path.dirname(BASE_DIR), 'mapping', 'mapping_KEK_anomaly.csv')
+                        
+                        python_cmd = f"cd {os.path.dirname(BASE_DIR)}/anomaly && python3 detect_live.py --run {run_number} --towers {tower_str} --output {output_json} --models {model_dir} --mapping {mapping_file}"
+                        
+                        try:
+                            with open(log_file, 'w') as log_f:
+                                # Popen으로 프로세스 시작 (추적 가능하도록)
+                                anomaly_proc = subprocess.Popen(
+                                    python_cmd,
+                                    shell=True,
+                                    cwd=os.path.dirname(BASE_DIR),
+                                    env=CUSTOM_ENV,
+                                    stdout=log_f,
+                                    stderr=log_f
+                                )
+                                
+                                # 프로세스 추적 리스트에 추가
+                                with anomaly_lock:
+                                    anomaly_detection_processes[run_number] = anomaly_proc
+                                
+                                # 프로세스 완료 대기
+                                anomaly_proc.wait()
+                                
+                                # 프로세스 추적 리스트에서 제거
+                                with anomaly_lock:
+                                    if run_number in anomaly_detection_processes:
+                                        del anomaly_detection_processes[run_number]
+                            
+                            # Detection 결과가 성공적이면 PNG 파일 체크
+                            if anomaly_proc.returncode == 0 and os.path.exists(output_json):
+                                try:
+                                    with open(output_json, 'r') as f:
+                                        detection_result = json.load(f)
+                                    
+                                    # PNG 파일이 생성되었으면 로그에 추가
+                                    if detection_result.get('is_anomaly') and 'png_files' in detection_result:
+                                        with open(log_file, 'a') as log_f:
+                                            log_f.write(f"\n\n🖼️  PNG files generated:\n")
+                                            for png_file in detection_result['png_files']:
+                                                log_f.write(f"   - {png_file}\n")
+                                except:
+                                    pass
+                        except Exception as e:
+                            # 에러 로그 저장
+                            try:
+                                with open(log_file, 'a') as log_f:
+                                    log_f.write(f"\n\nError: {str(e)}\n")
+                            except:
+                                pass
+                            finally:
+                                # 에러 발생 시에도 추적 리스트에서 제거
+                                with anomaly_lock:
+                                    if run_number in anomaly_detection_processes:
+                                        del anomaly_detection_processes[run_number]
+                
+                # 스레드로 실행
+                anomaly_thread = threading.Thread(target=run_live_anomaly_detection, daemon=True)
+                anomaly_thread.start()
+                
+                yield f"data: {json.dumps({'type': 'anomaly_started', 'content': f'🔍 Live anomaly detection started for Run {run_number}'})}\n\n"
             
             global current_process
             
@@ -487,7 +1049,7 @@ def execute_stream():
                 
                 with process_lock:
                     current_process = subprocess.Popen(
-                        command,
+                        monit_command,
                         shell=True,
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,  # stderr를 stdout과 합침
@@ -556,11 +1118,14 @@ def execute_stream():
                 current_process.wait()
                 
                 # 완료 알림
-                yield f"data: {json.dumps({'type': 'complete', 'content': f'Command exited with code: {current_process.returncode}'})}\n\n"
+                monit_returncode = current_process.returncode
+                yield f"data: {json.dumps({'type': 'complete', 'content': f'DQM plotting exited with code: {monit_returncode}'})}\n\n"
                 
                 # 프로세스 완료 후 정리
                 with process_lock:
                     current_process = None
+                
+                # Anomaly detection은 백그라운드에서 실행 중 (결과는 왼쪽 창에 표시하지 않음)
                 
             except Exception as e:
                 yield f"data: {json.dumps({'type': 'error', 'content': f'Error: {str(e)}'})}\n\n"
@@ -891,6 +1456,10 @@ def kill_process():
     try:
         global current_process
         
+        killed_monit = False
+        killed_anomaly = False
+        
+        # 1. monit 프로세스 종료
         with process_lock:
             if current_process is not None and current_process.poll() is None:
                 # 프로세스가 실행 중인 경우 종료
@@ -902,15 +1471,59 @@ def kill_process():
                     current_process.kill()
                     current_process.wait()
                 
-                return jsonify({
-                    'success': True,
-                    'message': 'Process terminated successfully'
-                })
-            else:
-                return jsonify({
-                    'success': False,
-                    'message': 'No running process to kill'
-                })
+                killed_monit = True
+        
+        # 2. 백그라운드 anomaly detection 프로세스 종료
+        with anomaly_lock:
+            if anomaly_detection_processes:
+                for run_num, proc in list(anomaly_detection_processes.items()):
+                    if proc.poll() is None:  # 실행 중인 경우
+                        try:
+                            proc.terminate()
+                            proc.wait(timeout=3)
+                        except subprocess.TimeoutExpired:
+                            proc.kill()
+                            proc.wait()
+                        except:
+                            pass
+                        
+                        # 결과 파일 삭제 (Anomaly와 Normal PNG 둘 다)
+                        output_json = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_live.json')
+                        log_file = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_live.log')
+                        png_anomaly_c = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_C.png')
+                        png_anomaly_s = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_S.png')
+                        png_normal_c = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_normal_C.png')
+                        png_normal_s = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_normal_S.png')
+                        
+                        for f in [output_json, log_file, png_anomaly_c, png_anomaly_s, png_normal_c, png_normal_s]:
+                            if os.path.exists(f):
+                                try:
+                                    os.remove(f)
+                                except:
+                                    pass
+                        
+                        killed_anomaly = True
+                
+                # 모든 프로세스 제거
+                anomaly_detection_processes.clear()
+        
+        # 결과 메시지 생성
+        if killed_monit and killed_anomaly:
+            message = 'Monit and Anomaly Detection processes terminated successfully'
+        elif killed_monit:
+            message = 'Monit process terminated successfully'
+        elif killed_anomaly:
+            message = 'Anomaly Detection processes terminated successfully'
+        else:
+            return jsonify({
+                'success': False,
+                'message': 'No running process to kill'
+            })
+        
+        return jsonify({
+            'success': True,
+            'message': message
+        })
                 
     except Exception as e:
         return jsonify({
@@ -990,6 +1603,36 @@ def kill_all_monit():
             except (ValueError, OSError) as e:
                 failed_pids.append(proc['pid'])
         
+        # Kill all anomaly detection processes and remove results
+        with anomaly_lock:
+            for run_num, anomaly_proc in list(anomaly_detection_processes.items()):
+                if anomaly_proc.poll() is None:
+                    try:
+                        anomaly_proc.terminate()
+                        anomaly_proc.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        anomaly_proc.kill()
+                        anomaly_proc.wait()
+                    except:
+                        pass
+                
+                # 결과 파일 삭제 (Anomaly와 Normal PNG 둘 다)
+                output_json = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_live.json')
+                log_file = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_live.log')
+                png_anomaly_c = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_C.png')
+                png_anomaly_s = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_anomaly_S.png')
+                png_normal_c = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_normal_C.png')
+                png_normal_s = os.path.join(BASE_DIR, 'output', f'Run_{run_num}_normal_S.png')
+                
+                for f in [output_json, log_file, png_anomaly_c, png_anomaly_s, png_normal_c, png_normal_s]:
+                    if os.path.exists(f):
+                        try:
+                            os.remove(f)
+                        except:
+                            pass
+            
+            anomaly_detection_processes.clear()
+        
         message = f"Killed {len(killed_pids)} ./monit process(es)"
         if failed_pids:
             message += f", failed to kill: {failed_pids}"
@@ -1037,7 +1680,7 @@ def verify_code():
         code = data.get('code', '')
         
         # 간단한 보안 코드 (실제 환경에서는 더 안전한 방법 사용)
-        SECURITY_CODE = "TB2025"
+        SECURITY_CODE = "KEK"
         
         if code == SECURITY_CODE:
             return jsonify({
@@ -1099,16 +1742,327 @@ def get_system_info():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/DRC_DQM_manual.pdf')
+@app.route('/dqm_manual.pdf')
 def serve_dqm_manual():
     try:
-        pdf_path = os.path.join(os.path.dirname(__file__), 'DRC_DQM_manual.pdf')
+        pdf_path = os.path.join(os.path.dirname(__file__), 'dqm_manual.pdf')
         if os.path.exists(pdf_path):
             return send_file(pdf_path, mimetype='application/pdf', as_attachment=False)
         else:
             return "DQM Manual PDF not found. Please ensure DRC_DQM_manual.pdf is in the monit directory.", 404
     except Exception as e:
         return f"Error serving DQM manual: {str(e)}", 500
+
+# AI Agent 관리 API
+@app.route('/agent/launch', methods=['POST'])
+def launch_agent():
+    """AI Agent를 실행합니다."""
+    try:
+        global agent_process
+        
+        # 현재 요청의 호스트 정보 가져오기 (원격 접속 지원)
+        request_host = request.host.split(':')[0]  # 포트 제거
+        if request_host == 'localhost' or request_host == '127.0.0.1':
+            # localhost인 경우 실제 서버 IP 가져오기
+            import socket
+            try:
+                # 외부 연결을 위한 IP 주소 가져오기
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                request_host = s.getsockname()[0]
+                s.close()
+            except:
+                request_host = request.host.split(':')[0]
+        
+        with agent_lock:
+            # 이미 실행 중인지 확인
+            if agent_process is not None and agent_process.poll() is None:
+                # 기존 포트 확인 (로그에서 추출 시도)
+                agent_port = 5001
+                try:
+                    import re
+                    log_file = os.path.join(os.path.dirname(BASE_DIR), 'logs', 'agent.log')
+                    if os.path.exists(log_file):
+                        with open(log_file, 'r') as f:
+                            log_content = f.read()
+                            port_match = re.search(r'로컬 접속:\s*http://[^\s:]+:(\d+)', log_content)
+                            if not port_match:
+                                port_match = re.search(r'Running on\s+http://[^\s:]+:(\d+)', log_content)
+                            if port_match:
+                                agent_port = int(port_match.group(1))
+                except:
+                    pass
+                
+                return jsonify({
+                    'success': True,
+                    'message': 'AI Agent is already running',
+                    'pid': agent_process.pid,
+                    'url': f'http://{request_host}:{agent_port}'
+                })
+            
+            # agent.py 경로
+            agent_script = os.path.join(os.path.dirname(BASE_DIR), 'agent.py')
+            
+            if not os.path.exists(agent_script):
+                return jsonify({
+                    'success': False,
+                    'message': f'Agent script not found: {agent_script}'
+                }), 404
+            
+            # 로그 파일 경로
+            log_dir = os.path.join(os.path.dirname(BASE_DIR), 'logs')
+            os.makedirs(log_dir, exist_ok=True)
+            log_file = os.path.join(log_dir, 'agent.log')
+            
+            # 로그 파일 열기
+            log_f = open(log_file, 'w')
+            
+            # 환경변수 준비 - Flask 관련 환경변수 제거
+            env = os.environ.copy()
+            # Flask가 파일 디스크립터를 사용하려고 하는 것을 방지
+            env.pop('FLASK_RUN_FROM_CLI', None)
+            env.pop('WERKZEUG_RUN_MAIN', None)
+            env.pop('SERVER_SOFTWARE', None)
+            # 디버거 관련 환경변수 제거
+            env.pop('FLASK_DEBUG', None)
+            env.pop('WERKZEUG_DEBUG_PIN', None)
+            
+            # agent.py 실행 (stdout/stderr를 로그 파일로)
+            agent_process = subprocess.Popen(
+                ['python3', agent_script],
+                cwd=os.path.dirname(BASE_DIR),
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                env=env,
+                start_new_session=True  # 새로운 세션에서 시작
+            )
+            
+            # 프로세스가 시작될 때까지 대기 및 상태 확인
+            import time
+            max_wait = 10  # 최대 10초 대기
+            waited = 0
+            agent_started = False
+            
+            while waited < max_wait:
+                time.sleep(0.5)
+                waited += 0.5
+                
+                # 프로세스가 죽었는지 확인
+                if agent_process.poll() is not None:
+                    # 프로세스가 종료됨 - 로그 확인
+                    log_f.close()
+                    with open(log_file, 'r') as f:
+                        error_log = f.read()
+                    return jsonify({
+                        'success': False,
+                        'message': 'Agent failed to start',
+                        'error': error_log[-500:] if error_log else 'Unknown error'
+                    }), 500
+                
+                # Agent가 실제로 시작되었는지 포트로 확인
+                # 로그 파일에서 포트 번호 추출 시도
+                agent_port = None
+                try:
+                    import re
+                    if os.path.exists(log_file):
+                        with open(log_file, 'r') as f:
+                            log_content = f.read()
+                            # 여러 패턴 시도
+                            # 1. "로컬 접속: http://localhost:5002" 패턴
+                            port_match1 = re.search(r'로컬 접속:\s*http://[^\s:]+:(\d+)', log_content)
+                            if port_match1:
+                                agent_port = int(port_match1.group(1))
+                            else:
+                                # 2. "Running on http://127.0.0.1:5002" 패턴 (첫 번째)
+                                port_match2 = re.search(r'Running on\s+http://[^\s:]+:(\d+)', log_content)
+                                if port_match2:
+                                    agent_port = int(port_match2.group(1))
+                            print(f"DEBUG: Extracted port from log: {agent_port}")
+                except Exception as e:
+                    print(f"DEBUG: Error extracting port: {e}")
+                    pass
+                
+                # 포트를 찾았으면 해당 포트부터 확인
+                if agent_port:
+                    try:
+                        import socket
+                        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                        sock.settimeout(0.5)
+                        result = sock.connect_ex(('localhost', agent_port))
+                        sock.close()
+                        if result == 0:
+                            agent_started = True
+                            break
+                    except:
+                        pass
+                else:
+                    # 포트를 찾지 못했으면 여러 포트 확인 (5001부터 5010까지)
+                    for check_port in range(5001, 5011):
+                        try:
+                            import socket
+                            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                            sock.settimeout(0.5)
+                            result = sock.connect_ex(('localhost', check_port))
+                            sock.close()
+                            if result == 0:
+                                agent_started = True
+                                agent_port = check_port
+                                break
+                        except:
+                            continue
+                
+                if agent_started and agent_port:
+                    break
+            
+            if not agent_started:
+                # 타임아웃 - 프로세스는 살아있지만 포트가 안 열림
+                return jsonify({
+                    'success': False,
+                    'message': 'Agent process started but no port responding',
+                    'hint': 'Check logs/agent.log for details'
+                }), 500
+            
+            return jsonify({
+                'success': True,
+                'message': 'AI Agent started successfully',
+                'pid': agent_process.pid,
+                'url': f'http://{request_host}:{agent_port}'
+            })
+            
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error launching agent: {str(e)}'
+        }), 500
+
+@app.route('/agent/status', methods=['GET'])
+def agent_status():
+    """AI Agent의 실행 상태를 확인합니다."""
+    try:
+        global agent_process
+        
+        # 현재 요청의 호스트 정보 가져오기 (원격 접속 지원)
+        request_host = request.host.split(':')[0]  # 포트 제거
+        if request_host == 'localhost' or request_host == '127.0.0.1':
+            # localhost인 경우 실제 서버 IP 가져오기
+            import socket
+            try:
+                # 외부 연결을 위한 IP 주소 가져오기
+                s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                s.connect(("8.8.8.8", 80))
+                request_host = s.getsockname()[0]
+                s.close()
+            except:
+                request_host = request.host.split(':')[0]
+        
+        with agent_lock:
+            if agent_process is not None and agent_process.poll() is None:
+                # 포트 확인 (로그에서 추출 시도)
+                agent_port = 5001
+                try:
+                    import re
+                    log_file = os.path.join(os.path.dirname(BASE_DIR), 'logs', 'agent.log')
+                    if os.path.exists(log_file):
+                        with open(log_file, 'r') as f:
+                            log_content = f.read()
+                            port_match = re.search(r'로컬 접속:\s*http://[^\s:]+:(\d+)', log_content)
+                            if not port_match:
+                                port_match = re.search(r'Running on\s+http://[^\s:]+:(\d+)', log_content)
+                            if port_match:
+                                agent_port = int(port_match.group(1))
+                except:
+                    pass
+                
+                return jsonify({
+                    'running': True,
+                    'pid': agent_process.pid,
+                    'url': f'http://{request_host}:{agent_port}'
+                })
+            else:
+                return jsonify({
+                    'running': False
+                })
+                
+    except Exception as e:
+        return jsonify({
+            'running': False,
+            'error': str(e)
+        })
+
+@app.route('/agent/stop', methods=['POST'])
+def stop_agent():
+    """AI Agent를 종료합니다."""
+    try:
+        global agent_process
+        
+        with agent_lock:
+            if agent_process is not None and agent_process.poll() is None:
+                try:
+                    # 프로세스 종료
+                    agent_process.terminate()
+                    try:
+                        agent_process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        agent_process.kill()
+                        agent_process.wait()
+                except Exception as e:
+                    # 프로세스가 이미 종료되었을 수 있음
+                    pass
+                
+                agent_process = None
+                return jsonify({
+                    'success': True,
+                    'message': 'AI Agent stopped successfully'
+                })
+            else:
+                # 이미 종료된 상태
+                agent_process = None
+                return jsonify({
+                    'success': True,
+                    'message': 'AI Agent was not running'
+                })
+                
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Error stopping agent: {str(e)}'
+        }), 500
+
+# Anomaly Detection 결과 조회 API
+@app.route('/anomaly_status/<int:run_number>', methods=['GET'])
+def get_anomaly_status(run_number):
+    """Live anomaly detection 결과 조회 (PNG 파일 포함)"""
+    try:
+        # BASE_DIR의 output 폴더에서 찾음
+        output_json = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_live.json')
+        
+        if os.path.exists(output_json):
+            with open(output_json, 'r') as f:
+                result = json.load(f)
+            
+            # PNG 파일이 실제로 존재하는지 확인
+            if 'png_files' in result:
+                verified_png_files = []
+                for png_file in result['png_files']:
+                    png_path = os.path.join(BASE_DIR, 'output', png_file)
+                    if os.path.exists(png_path):
+                        verified_png_files.append(png_file)
+                result['png_files'] = verified_png_files
+            
+            return jsonify(result)
+        else:
+            # 로그 파일도 확인해서 에러가 있는지 체크
+            log_file = os.path.join(BASE_DIR, 'output', f'Run_{run_number}_anomaly_live.log')
+            if os.path.exists(log_file):
+                with open(log_file, 'r') as f:
+                    log_content = f.read()
+                    if log_content.strip():
+                        return jsonify({'status': 'running', 'message': 'Detection in progress', 'log_preview': log_content[-500:]})
+            
+            return jsonify({'status': 'pending', 'message': 'Detection in progress or not started'})
+            
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
 
 if __name__ == '__main__':
     print(f"✅ Server starting...")

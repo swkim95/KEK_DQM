@@ -11,6 +11,8 @@
 #include <iostream>
 #include <string>
 #include <chrono>
+#include <algorithm>
+#include <cctype>
 
 #include <mach/mach.h>
 #include <mach/vm_statistics.h>
@@ -156,7 +158,23 @@ void TBmonit<T>::LoopLive() {
     // for (int i = 0; i < aModules.size(); i++)
     //   aCID.push_back(fUtility.GetCID(aModules.at(i)));
 
-    fPlotter.SetCID(aModules);
+    // T1, T2 등만 입력된 경우 T1-S, T1-C로 확장
+    auto isTowerName = [](const std::string& module) {
+      if (module.size() <= 1 || module.at(0) != 'T') return false;
+      return std::all_of(module.begin() + 1, module.end(), [](unsigned char c){ return std::isdigit(c); });
+    };
+
+    std::vector<std::string> expandedModules = {};
+    for (const auto& module : aModules) {
+      if (isTowerName(module)) {
+        expandedModules.push_back(module + "-S");
+        expandedModules.push_back(module + "-C");
+      } else {
+        expandedModules.push_back(module);
+      }
+    }
+
+    fPlotter.SetCID(expandedModules);
   } else {
     // !throw exception
   }
@@ -281,7 +299,23 @@ void TBmonit<T>::LoopAfterRun() {
     // for (int i = 0; i < aModules.size(); i++)
     //   aCID.push_back(fUtility.GetCID(aModules.at(i)));
 
-    fPlotter.SetCID(aModules);
+    // T1, T2 등만 입력된 경우 T1-S, T1-C로 확장
+    auto isTowerName = [](const std::string& module) {
+      if (module.size() <= 1 || module.at(0) != 'T') return false;
+      return std::all_of(module.begin() + 1, module.end(), [](unsigned char c){ return std::isdigit(c); });
+    };
+
+    std::vector<std::string> expandedModules = {};
+    for (const auto& module : aModules) {
+      if (isTowerName(module)) {
+        expandedModules.push_back(module + "-S");
+        expandedModules.push_back(module + "-C");
+      } else {
+        expandedModules.push_back(module);
+      }
+    }
+
+    fPlotter.SetCID(expandedModules);
   } else {
     // !throw exception
   }

@@ -105,21 +105,21 @@ private:
   TH2D* fDWCXaxis;
   TH2D* fDWCYaxis;
 
-  TH1D* fPS;
-  TH1D* fMC;
-  TH1D* fTC;
-  TH1D* fCC1;
-  TH1D* fCC2;
+  // TH1D* fPS;
+  // TH1D* fMC;
+  // TH1D* fTC;
+  // TH1D* fCC1;
+  // TH1D* fCC2;
 
-  TH1D* fFrameTop;
-  TH1D* fFrameBot;
+  // TH1D* fFrameTop;
+  // TH1D* fFrameBot;
 
-  double fPScut;
-  double fPSInitCut;
-  double fPSFinCut;
-  double fMCcut;
-  double fCC1cut;
-  double fCC2cut;
+  // double fPScut;
+  // double fPSInitCut;
+  // double fPSFinCut;
+  // double fMCcut;
+  // double fCC1cut;
+  // double fCC2cut;
   double fDWCPosCut;
   double fDWCCorr;
 
