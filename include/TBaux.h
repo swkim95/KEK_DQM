@@ -39,9 +39,9 @@ public:
   void Fill(TBevt<TBwaveform> anEvent);
   void Fill(TBevt<TBfastmode> anEvent) {}
 
-  float LinearInterp(float x1, float y1, float x2, float y2, float threshold);
-  float GetLeadingEdgeBin(std::vector<float> waveform, float percent);
-  std::vector<float> GetPosition(std::vector<std::vector<float>> wave); // 1R, 1L, 1U, 1D, 2R, 2L, 2U, 2D
+  float LinearInterp(float x1, float y1, float x2, float y2, float threshold) const;
+  float GetLeadingEdgeBin(const std::vector<float>& waveform, float percent) const;
+  std::vector<float> GetPosition(const std::vector<std::vector<float>>& wave); // WCX, WCY, NIM
 
 
 
@@ -100,10 +100,7 @@ private:
 
   std::string fMethod;
 
-  TH2D* fDWC1;
-  TH2D* fDWC2;
-  TH2D* fDWCXaxis;
-  TH2D* fDWCYaxis;
+  TH2D* fWCPosition;
 
   // TH1D* fPS;
   // TH1D* fMC;
@@ -120,18 +117,17 @@ private:
   // double fMCcut;
   // double fCC1cut;
   // double fCC2cut;
-  double fDWCPosCut;
-  double fDWCCorr;
+  double fWCThreshold;
+  double fWCCalibration;
+  std::vector<double> fWCReference; // timing reference per axis
+  double fWCPosCut;
 
   std::vector<TBcid> fCIDtoPlot;
   std::map<std::string, std::vector<int>> fRangeMap;
 
-  // DWC1 horizontal slope, DWC1 horizontal offset, DWC1 vertical slope, DWC1 vertical offset
-  // DWC2 horizontal slope, DWC2 horizontal offset, DWC2 vertical slope, DWC2 vertical offset
-  std::vector<float> fDWCCalib;
-
-  // DWC_1_X, DWC_1_Y, DWC_2_X, DWC_2_Y
-  std::vector<float> fDWCCenter;
+  TBcid fCID_WCX;
+  TBcid fCID_WCY;
+  TBcid fCID_NIM;
 
 };
 

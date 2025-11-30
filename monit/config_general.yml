@@ -1,11 +1,11 @@
 BaseDirectory: "/Volumes/SSD_8TB"
 Mapping: "../mapping/mapping_KEK.root"
 AUX:
-  DWC:
-    CENTER: [-5.24, -8.416, -2.834, -9.524] # 1X, 1Y, 2X, 2Y
-    CALIB: [0.180654, 0.217961, -0.180342, -0.0994697, 0.181416, -0.00911072, -0.17822, -0.0489771]
-    POSCUT: 5 #mm
-    CORR: 4 #mm
+  WC:
+    CALIB: 0.05            # mm/ns
+    CENTER: [-71.8982, -116.249]     # Reference timing offsets (ns) for X and Y
+    THRESHOLD: 0.3         # Leading-edge fraction
+    POSCUT: 5           # Optional |x|,|y| cut in mm
     
 ModuleConfig:
   trg1: [80, 230]
