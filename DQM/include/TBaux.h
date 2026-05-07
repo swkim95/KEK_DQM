@@ -50,6 +50,10 @@ public:
 
   void SaveAs(TString output = "");
 
+  // Hodoscope filling (16x16 fiber map of the highest-amplitude X/Y bin per
+  // event). Called from Fill() when --AUX is set.
+  void FillHodoscope(TBevt<TBwaveform> anEvent);
+
   double GetPeakADC(std::vector<short> waveform, int xInit, int xFin);
   double GetIntADC(std::vector<short> waveform, int xInit, int xFin);
 
@@ -129,6 +133,21 @@ private:
   TBcid fCID_WCY;
   TBcid fCID_NIM;
 
+  // ── Hodoscope (16 X-fibers × 16 Y-fibers) ───────────────────────────────
+  // Channel-name lists currently use the dummy tower-channel names from
+  // draw_hodoscope.cc; once the proper hodoscope mapping is delivered they
+  // can be swapped for X1..X16 / Y1..Y16 without touching the logic.
+  bool fHodoEnabled;
+  std::vector<TBcid> fCID_HodoX;   // 16 entries
+  std::vector<TBcid> fCID_HodoY;   // 16 entries
+  int fHodoIntFirst;
+  int fHodoIntLast;
+  int fHodoPeakFirst;
+  int fHodoPeakLast;
+  TH2F* fHodoIntADC;
+  TH2F* fHodoPeakADC;
+  TCanvas* fCanvasHodoIntADC;
+  TCanvas* fCanvasHodoPeakADC;
 };
 
 

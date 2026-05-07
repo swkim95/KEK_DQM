@@ -2,7 +2,10 @@
 #include "GuiTypes.h"
 #include "TSystem.h"
 #include "TStyle.h"
+#include "TBufferJSON.h"
 #include <sys/types.h>
+#include <fstream>
+#include <cstdio>
 
 
 TBaux::TBaux(const YAML::Node fNodePlot_, int fRunNum_, bool fPlotting_, bool fLive_, bool fDraw_, TButility fUtility_)
@@ -24,7 +27,18 @@ TBaux::TBaux(const YAML::Node fNodePlot_, int fRunNum_, bool fPlotting_, bool fL
   fWCPosCut(-1.),
   fCID_WCX(),
   fCID_WCY(),
-  fCID_NIM()
+  fCID_NIM(),
+  fHodoEnabled(false),
+  fCID_HodoX(),
+  fCID_HodoY(),
+  fHodoIntFirst(150),
+  fHodoIntLast(350),
+  fHodoPeakFirst(150),
+  fHodoPeakLast(350),
+  fHodoIntADC(nullptr),
+  fHodoPeakADC(nullptr),
+  fCanvasHodoIntADC(nullptr),
+  fCanvasHodoPeakADC(nullptr)
 {}
 
 void TBaux::init() {
@@ -73,6 +87,52 @@ void TBaux::init() {
   fCanvas = new TCanvas("fCanvas_WC", "fCanvas_WC", 1200, 800);
   fCanvas->Divide(1, 1);
   fCanvas->cd(1)->SetRightMargin(0.13);
+
+  // ── Hodoscope ─────────────────────────────────────────────────────────
+  // 16 X-fibers and 16 Y-fibers. We mirror the dummy naming used in
+  // draw_hodoscope.cc:75-107 — the hodoscope mapping isn't ready yet, so
+  // both X and Y borrow the existing tower channel names. When the proper
+  // mapping arrives, only the two hodoX_names / hodoY_names lists below
+  // need to change.
+  const std::vector<std::string> hodoX_names = {
+    "T1-C","T2-C","T3-C","T4-C","T5-C","T6-C","T7-C","T8-C","T9-C",
+    "T1-S","T2-S","T3-S","T4-S","T5-S","T6-S","T7-S"
+  };
+  const std::vector<std::string> hodoY_names = {
+    "T1-C","T2-C","T3-C","T4-C","T5-C","T6-C","T7-C","T8-C","T9-C",
+    "T1-S","T2-S","T3-S","T4-S","T5-S","T6-S","T7-S"
+  };
+
+  fCID_HodoX.clear();
+  fCID_HodoY.clear();
+  fCID_HodoX.reserve(hodoX_names.size());
+  fCID_HodoY.reserve(hodoY_names.size());
+  for (const auto& n : hodoX_names) fCID_HodoX.push_back(fUtility.GetCID(n));
+  for (const auto& n : hodoY_names) fCID_HodoY.push_back(fUtility.GetCID(n));
+
+  // Make sure TBread fetches the MIDs hosting these channels too.
+  for (const auto& cid : fCID_HodoX) fCIDtoPlot.push_back(cid);
+  for (const auto& cid : fCID_HodoY) fCIDtoPlot.push_back(cid);
+
+  fHodoIntADC = new TH2F(
+    "hodoscope_intADC",
+    (TString)"Run " + std::to_string(fRunNum) + " Hodoscope IntADC;X [fiber];Y [fiber];events",
+    16, 0., 16., 16, 0., 16.);
+  fHodoIntADC->SetStats(0);
+
+  fHodoPeakADC = new TH2F(
+    "hodoscope_peakADC",
+    (TString)"Run " + std::to_string(fRunNum) + " Hodoscope PeakADC;X [fiber];Y [fiber];events",
+    16, 0., 16., 16, 0., 16.);
+  fHodoPeakADC->SetStats(0);
+
+  fCanvasHodoIntADC = new TCanvas("fCanvas_HodoIntADC", "fCanvas_HodoIntADC", 800, 800);
+  fCanvasHodoIntADC->cd()->SetRightMargin(0.13);
+
+  fCanvasHodoPeakADC = new TCanvas("fCanvas_HodoPeakADC", "fCanvas_HodoPeakADC", 800, 800);
+  fCanvasHodoPeakADC->cd()->SetRightMargin(0.13);
+
+  fHodoEnabled = true;
 }
 
 void TBaux::SetParticle(std::string fParticle_) {
@@ -106,6 +166,20 @@ void TBaux::SetRange(const YAML::Node tConfigNode) {
   // Reserved for future per-channel range configuration (e.g., WCX/WCY windows)
   // Example usage:
   // fRangeMap.insert(std::make_pair("WCX", tConfigNode["WCX"].as<std::vector<int>>()));
+
+  // ModuleConfig.Hodoscope: { INT_RANGE: [a, b], PEAK_RANGE: [c, d] }
+  // If the entry is missing, the constructor defaults (150, 350) are kept.
+  const auto hodo = tConfigNode["Hodoscope"];
+  if (hodo) {
+    if (hodo["INT_RANGE"]) {
+      const auto r = hodo["INT_RANGE"].as<std::vector<int>>();
+      if (r.size() == 2) { fHodoIntFirst = r[0]; fHodoIntLast = r[1]; }
+    }
+    if (hodo["PEAK_RANGE"]) {
+      const auto r = hodo["PEAK_RANGE"].as<std::vector<int>>();
+      if (r.size() == 2) { fHodoPeakFirst = r[0]; fHodoPeakLast = r[1]; }
+    }
+  }
 }
 
 double TBaux::GetPeakADC(std::vector<short> waveform, int xInit, int xFin) {
@@ -183,20 +257,62 @@ std::vector<float> TBaux::GetPosition(const std::vector<std::vector<float>>& wav
 
 void TBaux::Fill(TBevt<TBwaveform> anEvent) {
 
-  if (!fWCPosition)
-    return;
+  // ── Wire chamber position ───────────────────────────────────────────────
+  if (fWCPosition) {
+    std::vector<std::vector<float>> wcWaves;
+    wcWaves.reserve(3);
+    wcWaves.push_back(anEvent.GetData(fCID_WCX).pedcorrectedWaveform());
+    wcWaves.push_back(anEvent.GetData(fCID_WCY).pedcorrectedWaveform());
+    wcWaves.push_back(anEvent.GetData(fCID_NIM).pedcorrectedWaveform());
 
-  std::vector<std::vector<float>> wcWaves;
-  wcWaves.reserve(3);
-  wcWaves.push_back(anEvent.GetData(fCID_WCX).pedcorrectedWaveform());
-  wcWaves.push_back(anEvent.GetData(fCID_WCY).pedcorrectedWaveform());
-  wcWaves.push_back(anEvent.GetData(fCID_NIM).pedcorrectedWaveform());
+    const auto posVec = GetPosition(wcWaves);
+    if (posVec.size() == 2)
+      fWCPosition->Fill(posVec.at(0), posVec.at(1));
+  }
 
-  auto posVec = GetPosition(wcWaves);
-  if (posVec.size() != 2)
-    return;
+  // ── Hodoscope (16x16 IntADC and PeakADC maxima) ─────────────────────────
+  if (fHodoEnabled)
+    FillHodoscope(anEvent);
+}
 
-  fWCPosition->Fill(posVec.at(0), posVec.at(1));
+void TBaux::FillHodoscope(TBevt<TBwaveform> anEvent) {
+
+  if (!fHodoIntADC || !fHodoPeakADC) return;
+  if (fCID_HodoX.size() != 16 || fCID_HodoY.size() != 16) return;
+
+  // For each event, find the brightest fiber along X and the brightest
+  // fiber along Y (separately for IntADC and PeakADC), then fill the 2D
+  // (X,Y) histogram. Mirrors draw_hodoscope.cc::247-266.
+  std::vector<float> intADC_X(16, 0.f);
+  std::vector<float> intADC_Y(16, 0.f);
+  std::vector<float> peakADC_X(16, 0.f);
+  std::vector<float> peakADC_Y(16, 0.f);
+
+  // Use TBaux's own GetIntADC / GetPeakADC (same pedestal-corrected
+  // integration and max-search as function.h's GetInt / GetPeak, just
+  // member functions so we don't have to include function.h — which
+  // would create duplicate-symbol linker errors against the standalone
+  // draw_*.cc executables that already include it).
+  for (int i = 0; i < 16; ++i) {
+    const std::vector<short> wfX = anEvent.GetData(fCID_HodoX[i]).waveform();
+    const std::vector<short> wfY = anEvent.GetData(fCID_HodoY[i]).waveform();
+    if (wfX.size() > static_cast<size_t>(fHodoIntLast)) {
+      intADC_X[i]  = static_cast<float>(GetIntADC (wfX, fHodoIntFirst,  fHodoIntLast ));
+      peakADC_X[i] = static_cast<float>(GetPeakADC(wfX, fHodoPeakFirst, fHodoPeakLast));
+    }
+    if (wfY.size() > static_cast<size_t>(fHodoIntLast)) {
+      intADC_Y[i]  = static_cast<float>(GetIntADC (wfY, fHodoIntFirst,  fHodoIntLast ));
+      peakADC_Y[i] = static_cast<float>(GetPeakADC(wfY, fHodoPeakFirst, fHodoPeakLast));
+    }
+  }
+
+  const int xIdxInt  = std::max_element(intADC_X.begin(),  intADC_X.end())  - intADC_X.begin();
+  const int yIdxInt  = std::max_element(intADC_Y.begin(),  intADC_Y.end())  - intADC_Y.begin();
+  const int xIdxPeak = std::max_element(peakADC_X.begin(), peakADC_X.end()) - peakADC_X.begin();
+  const int yIdxPeak = std::max_element(peakADC_Y.begin(), peakADC_Y.end()) - peakADC_Y.begin();
+
+  fHodoIntADC ->Fill(xIdxInt  + 0.5f, yIdxInt  + 0.5f, 1);
+  fHodoPeakADC->Fill(xIdxPeak + 0.5f, yIdxPeak + 0.5f, 1);
 }
 
 bool TBaux::IsPassing(TBevt<TBwaveform> anEvent) {
@@ -260,23 +376,83 @@ void TBaux::Update() {
 
   SetMaximum();
 
+  // ── Draw all AUX canvases ───────────────────────────────────────────────
   fCanvas->cd(1);
   fWCPosition->Draw("colz");
-
   fCanvas->cd();
   fCanvas->Update();
   if (fDraw) fCanvas->Pad()->Draw();
 
+  if (fHodoEnabled && fCanvasHodoIntADC && fHodoIntADC) {
+    fCanvasHodoIntADC->cd();
+    fHodoIntADC->Draw("colz");
+    fCanvasHodoIntADC->Update();
+    if (fDraw) fCanvasHodoIntADC->Pad()->Draw();
+  }
+
+  if (fHodoEnabled && fCanvasHodoPeakADC && fHodoPeakADC) {
+    fCanvasHodoPeakADC->cd();
+    fHodoPeakADC->Draw("colz");
+    fCanvasHodoPeakADC->Update();
+    if (fDraw) fCanvasHodoPeakADC->Pad()->Draw();
+  }
+
+  // ── Combined AUX ROOT file (WC + hodoscope) ─────────────────────────────
   TString output = "./output/Run" + std::to_string(fRunNum) + "_AUX.root";
   if (fAuxCut) output = "./output/Run" + std::to_string(fRunNum) + "_AUX_AuxCut.root";
-  TFile* outoutFile = new TFile(output, "RECREATE");
-  outoutFile->cd();
-  fCanvas->Write();
-  fWCPosition->Write();
-  outoutFile->Close();
+  {
+    TFile outoutFile(output, "RECREATE");
+    outoutFile.cd();
+    fCanvas->Write();
+    fWCPosition->Write();
+    if (fHodoEnabled) {
+      if (fCanvasHodoIntADC)  fCanvasHodoIntADC ->Write();
+      if (fCanvasHodoPeakADC) fCanvasHodoPeakADC->Write();
+      if (fHodoIntADC)        fHodoIntADC ->Write();
+      if (fHodoPeakADC)       fHodoPeakADC->Write();
+    }
+    outoutFile.Close();
+  }
 
-  if (fLive) gSystem->ProcessEvents();
-  if (!fLive && fApp) fApp->Run(false);
+  // ── Per-canvas JSON dumps ───────────────────────────────────────────────
+  // The web run-browser scans Run<N>_<type>_<method>[_AuxCut]_<canvas>.json.
+  // We split the AUX output across three pseudo-"methods" so they show up
+  // as distinguishable canvases in the run group:
+  //   method=WC         → fCanvas_WC          (wire-chamber position)
+  //   method=Hodoscope  → fCanvas_HodoIntADC  (16x16 hit map, IntADC)
+  //   method=Hodoscope  → fCanvas_HodoPeakADC (16x16 hit map, PeakADC)
+  // Each write is atomic (.tmp -> rename) so a polling LIVE viewer never
+  // reads a half-written file.
+  auto dumpJSON = [&](TCanvas* canvas, const std::string& methodPart) {
+    if (!canvas) return;
+    std::string basePrefix = "Run" + std::to_string(fRunNum) + "_AUX_" + methodPart;
+    if (fAuxCut) basePrefix += "_AuxCut";
+    const std::string canvasName = canvas->GetName();
+    const std::string finalPath = "./output/" + basePrefix + "_" + canvasName + ".json";
+    const std::string tmpPath = finalPath + ".tmp";
+    {
+      std::ofstream ofs(tmpPath);
+      if (ofs) {
+        TString json = TBufferJSON::ToJSON(canvas);
+        ofs << json.Data();
+      }
+    }
+    std::rename(tmpPath.c_str(), finalPath.c_str());
+  };
+
+  dumpJSON(fCanvas,             "WC");
+  if (fHodoEnabled) {
+    dumpJSON(fCanvasHodoIntADC,  "Hodoscope");
+    dumpJSON(fCanvasHodoPeakADC, "Hodoscope");
+  }
+
+  // Process pending GUI events only when the canvas is actually being
+  // displayed (--DRAW). In batch mode (web UI / scripted runs) we must
+  // NOT call fApp->Run(false): the TApplication is constructed without
+  // SetReturnFromRun(true) for non-LIVE, so Run(false) would block here
+  // forever — even though all output files have already been written.
+  // This mirrors the pattern used in TBplotengine::Update().
+  if (fDraw) gSystem->ProcessEvents();
 
   gSystem->Sleep(1000);
 }

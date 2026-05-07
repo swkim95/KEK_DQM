@@ -68,3 +68,10 @@ ModuleConfig:
   T8-C: [150, 310]
   T9-C: [150, 310]
 
+  # Hodoscope (single window applied to all 16 X and 16 Y fibers).
+  # PEAK_RANGE is the search window used by GetPeak; INT_RANGE feeds GetInt.
+  # For now both are [150, 350]; tighten after calibration.
+  Hodoscope:
+    INT_RANGE:  [150, 350]
+    PEAK_RANGE: [150, 350]
+
