@@ -1,0 +1,63 @@
+# ===== Per-agent DQM live dashboard manifest =====
+#
+# Each agent declares which monit configuration to run during DAQ runs (LIVE
+# mode) and which canvases to display by default in the right-bottom panel.
+#
+# - live.type / live.method: passed to monit (--type / --method)
+# - cells: canvas names to display by default (must match c->GetName() in C++)
+#   Variables like ${current_tower} are substituted at runtime from
+#   shared_state (see agents/agent_runner.py).
+#
+# Other canvases produced by the same monit run are still written to disk
+# (free byproduct of one event-loop pass) and become available in the
+# "Add plot" picker without any extra cost.
+#
+# C++ DQM (TBplotengine.cc, --type full) produces these canvases:
+#   - fCanvasHeatmap        : 2D mean(IntADC|PeakADC) per tower, Cerenkov + Scint
+#   - fCanvas_Tower1..9     : 1D ADC histogram for that tower's C (left) + S (right)
+
+# ── Energy scan: T5 fixed, sweep beam energy.
+#    • IntADC heatmap   — overall response (light yield ∝ energy)
+#    • T5 IntADC (C/S)  — direct view of the tower being illuminated
+EM_scan:
+  live:
+    type: full
+    method: IntADC
+    flags:
+      - AUXcut
+  cells:
+    - fCanvasHeatmap
+    - fCanvas_Tower5
+
+# ── Calibration scan: same energy, sweep tower position.
+#    • IntADC heatmap                — confirms which tower the beam hits
+#    • Current tower IntADC (C/S)    — distribution shape for the tower under test
+calib_scan:
+  live:
+    type: full
+    method: IntADC
+    flags:
+      - AUXcut
+  cells:
+    - fCanvasHeatmap
+    - fCanvas_Tower${current_tower}
+
+# ── HV equalization: focused on a single tower's C/S peakADC distributions —
+#    the per-tower 1D histogram already shows both C (left) and S (right).
+hv_equalization:
+  live:
+    type: full
+    method: PeakADC
+    flags:
+      - AUXcut
+  cells:
+    - fCanvas_Tower${current_tower}
+
+hv_equalization_sim:
+  live:
+    type: full
+    method: PeakADC
+    flags:
+      - AUXcut
+  cells:
+    - fCanvas_Tower${current_tower}
