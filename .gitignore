@@ -16,7 +16,9 @@ ai/
 
 # 로그
 logs/
-finetuning/logs/
+
+# finetuning
+finetuning/
 
 # logging 폴더 — 민감 JSON만 제외, 폴더는 .gitkeep으로 유지
 logging/*.json
@@ -29,9 +31,6 @@ DQM/output/
 DQM/build/
 DQM/lib/
 DQM/install/
-
-# 출력물
-position_scan_results/
 
 # 토이 데이터셋
 toydataset/

@@ -10,6 +10,7 @@ Designed to stay loaded in memory at all times (server start → server stop).
 """
 
 import json
+import time
 import threading
 import queue
 import traceback
@@ -17,25 +18,6 @@ from typing import Dict, Any, Optional
 
 from agents.base_agent import BaseAgent
 from agents.io_handler import WebSocketIO
-
-
-# ── Tool registry (lazy imports to avoid circular deps) ──────────────────────
-
-def _get_tool(name: str):
-    """Return a tool instance by name.  Imported lazily."""
-    if name == "daq_run":
-        from tools.daq_tool import DAQRunTool
-        return DAQRunTool()
-    if name == "dqm_plot":
-        from tools.dqm_tool import DQMPlotTool
-        return DQMPlotTool()
-    if name == "run_log":
-        from tools.run_log_tool import RunLogTool
-        return RunLogTool()
-    if name == "hv_read":
-        from tools.hv_control_tool import HVControlTool
-        return HVControlTool()
-    return None
 
 
 # Map tool names to shared lock keys.  None means no lock needed.
@@ -50,68 +32,6 @@ TOOL_LOCK_MAP = {
 # Tools that require user confirmation before execution.
 TOOLS_NEED_CONFIRM = {"hv_write"}
 
-
-# ── Regex fallback for critical HV-write commands ────────────────────────────
-#  Runs BEFORE the LLM output is used so that even an un-retrained model
-#  cannot silently miss a dangerous HV request.
-
-_CHANNEL_RE = r'T[1-9][CScs]'                                     # e.g. T1C, T3S
-_VOLTAGE_RE = r'(\d+(?:\.\d+)?)\s*[Vv]?'                          # 1500, 1500V, 100
-# "전압" / "전압을" / "전압으로" can appear between channel name and number
-_VOLT_KW    = r'(?:전압\s*(?:을|이|으로)?\s*)?'
-_ACTION_RE  = r'(?:(?:으로|로)\s*)?(?:수정|변경|설정|바꿔|올려|내려|인가|해줘|맞춰|세팅)?'
-
-
-def _pattern_match_hv_write(user_input: str) -> Optional[dict]:
-    """Return a hv_write decision if the input clearly matches, else None."""
-    s = user_input.strip()
-
-    # 1) Single/multi channel with voltage:
-    #    "T1S 20V로 수정", "T1C, T2C 1500V로 바꿔", "T9S 전압 100으로"
-    m = re.search(
-        rf'({_CHANNEL_RE}(?:\s*[,/]\s*{_CHANNEL_RE})*)\s+{_VOLT_KW}{_VOLTAGE_RE}{_ACTION_RE}',
-        s,
-    )
-    if m:
-        chs_raw = m.group(1)
-        voltage = float(m.group(2))
-        channels = [c.strip().upper() for c in re.split(r'[,/]', chs_raw)]
-        return {
-            "tool": "hv_write",
-            "params": {"command": "voltage", "channels": channels, "voltage": voltage},
-            "reason": f"{', '.join(channels)} 채널 전압을 {voltage}V로 변경",
-        }
-
-    # 2) All channels voltage change: "HV 1500V로 수정", "전체 HV 1500V"
-    #    Require an explicit all-channel keyword AND a verb — channel-specific requests
-    #    must NOT match here even if they fall through from rule 1.
-    m = re.search(
-        rf'(?:HV|전체|모든|전\s*채널)\s*(?:전압\s*(?:을)?\s*)?{_VOLTAGE_RE}',
-        s, re.IGNORECASE,
-    )
-    if m and re.search(r'(?:수정|변경|설정|바꿔|올려|내려|맞춰|세팅)', s):
-        voltage = float(m.group(1))
-        return {
-            "tool": "hv_write",
-            "params": {"command": "voltage", "channels": "all", "voltage": voltage},
-            "reason": f"모든 채널 전압을 {voltage}V로 변경",
-        }
-
-    # 3) ON / OFF
-    if re.search(r'HV.*(?:켜|on\b|turn\s*on)', s, re.IGNORECASE):
-        return {
-            "tool": "hv_write",
-            "params": {"command": "on", "channels": "all"},
-            "reason": "모든 HV 채널 켜기",
-        }
-    if re.search(r'HV.*(?:꺼|off\b|turn\s*off)', s, re.IGNORECASE):
-        return {
-            "tool": "hv_write",
-            "params": {"command": "off", "channels": "all"},
-            "reason": "모든 HV 채널 끄기",
-        }
-
-    return None
 
 
 SYSTEM_PROMPT = """You are the Brain Agent for a test beam experiment (KEK/CERN).
@@ -234,10 +154,8 @@ class BrainAgent(BaseAgent):
         4. Execute tool
         5. Send result to UI
         """
-        # 1. Build context
         context = self.build_full_context(current_input=user_input)
 
-        # 2. LLM inference
         io.send_status("BrainAgent 처리 중...")
         decision = self.decide(context)
 
@@ -249,7 +167,6 @@ class BrainAgent(BaseAgent):
         tool_name = decision.get("tool", "none")
         reason = decision.get("reason", "")
 
-        # "none" → clarification message
         if tool_name == "none":
             msg = decision.get("message", reason or "무엇을 도와드릴까요?")
             io.send_ai_message(msg)
@@ -258,8 +175,6 @@ class BrainAgent(BaseAgent):
 
         params = decision.get("params", {})
 
-        # 2.5. Parameter validation — if something is missing, ask via popup
-        #      and retry up to 2 times.
         for _attempt in range(2):
             missing = self._validate_params(tool_name, params)
             if not missing:
@@ -282,7 +197,6 @@ class BrainAgent(BaseAgent):
             io.send_status("대기 중")
             return
 
-        # 2.6. Confirmation required for dangerous tools
         if tool_name in TOOLS_NEED_CONFIRM:
             preview = self._format_confirm_preview(tool_name, params)
             io.send_ai_message(f"{reason}")
@@ -290,14 +204,12 @@ class BrainAgent(BaseAgent):
             while not self.confirm_queue.empty():
                 try: self.confirm_queue.get_nowait()
                 except queue.Empty: break
-            # Send confirmation request to popup UI
             io.output_queue.put({
                 "type": "adhoc_confirm",
                 "preview": preview,
                 "tool": tool_name,
             })
             io.send_status("사용자 확인 대기 중...")
-            # Block until user clicks 확인/취소
             try:
                 confirmed = self.confirm_queue.get(timeout=120)
             except queue.Empty:
@@ -308,11 +220,9 @@ class BrainAgent(BaseAgent):
                 io.send_ai_message("요청이 취소되었습니다.")
                 io.send_status("대기 중")
                 return
-            # Fall through to execution
         else:
             io.send_ai_message(f"{reason}")
 
-        # 3. Lock check
         lock_key = TOOL_LOCK_MAP.get(tool_name)
         lock = self.shared_locks.get(lock_key) if lock_key else None
 
@@ -322,7 +232,6 @@ class BrainAgent(BaseAgent):
             io.send_status("대기 중")
             return
 
-        # 4. Execute tool
         try:
             self._execute_tool(tool_name, params, io)
         finally:
@@ -399,73 +308,84 @@ class BrainAgent(BaseAgent):
 
     # ── Internal ─────────────────────────────────────────────────────────────
 
-    def _execute_tool(self, tool_name: str, params: dict, io: WebSocketIO):
-        """Run the actual tool and send output to the UI."""
-        try:
-            if tool_name == "daq_run":
-                from tools.daq_tool import DAQRunTool
-                io.send_status("DAQ 실행 중...")
-                DAQRunTool().execute(params, line_callback=io.send_tool_output)
+    def _execute_tool(self, tool_name: str, params: dict, io: WebSocketIO, max_retries: int = 3):
+        """Run the actual tool and send output to the UI. Retries on RuntimeError."""
+        last_error = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                if tool_name == "daq_run":
+                    from tools.daq_tool import DAQRunTool
+                    io.send_status("DAQ 실행 중...")
+                    DAQRunTool().execute(params, line_callback=io.send_tool_output)
 
-            elif tool_name == "dqm_plot":
-                from tools.dqm_tool import DQMPlotTool
-                from agents.dqm_live_worker import OUTPUT_DIR
-                run_number = int(params.get("run_number", 0))
-                method = params.get("method", "IntADC")
-                type_ = params.get("type", "full")
-                modules = params.get("modules", [])
-                io.send_status("DQM 플롯 생성 중...")
+                elif tool_name == "dqm_plot":
+                    from tools.dqm_tool import DQMPlotTool
+                    from tools.dqm_live_worker import OUTPUT_DIR
+                    run_number = int(params.get("run_number", 0))
+                    method = params.get("method", "IntADC")
+                    type_ = params.get("type", "full")
+                    modules = params.get("modules", [])
+                    io.send_status("DQM 플롯 생성 중...")
 
-                result = DQMPlotTool().execute(params)
-                io.send_tool_output(result)
+                    result = DQMPlotTool().execute(params)
+                    io.send_tool_output(result)
 
-                # Determine base_prefix for JSON scanning (mirrors TBplotengine.cc naming)
-                if type_ == "full":
-                    base_prefix = f"Run{run_number}_full_{method}"
-                elif type_ in ("heatmap", "module"):
-                    mod = modules[0] if modules else "MCPPMT"
-                    base_prefix = f"Run{run_number}_{type_}_{method}_{mod}"
+                    if type_ == "full":
+                        base_prefix = f"Run{run_number}_full_{method}"
+                    elif type_ in ("heatmap", "module"):
+                        mod = modules[0] if modules else "MCPPMT"
+                        base_prefix = f"Run{run_number}_{type_}_{method}_{mod}"
+                    else:
+                        base_prefix = f"Run{run_number}_single_{method}_"
+
+                    pfx = f"{base_prefix}_"
+                    canvases = [
+                        p.name[len(pfx):-len(".json")]
+                        for p in sorted(OUTPUT_DIR.glob(f"{base_prefix}_*.json"))
+                        if p.name.endswith(".json")
+                    ]
+                    if canvases:
+                        io.output_queue.put({
+                            "type": "dqm_canvases",
+                            "base_prefix": base_prefix,
+                            "canvases": canvases,
+                            "run_number": run_number,
+                        })
+                    else:
+                        io.send_ai_message(f"Run {run_number} DQM JSON 파일을 찾을 수 없습니다.")
+
+                elif tool_name in ("run_log", "run_log_read"):
+                    from tools.run_log_tool import RunLogTool
+                    result = RunLogTool().execute(params)
+                    io.send_tool_output(result)
+
+                elif tool_name == "hv_read":
+                    from tools.hv_control_tool import HVControlTool
+                    result = HVControlTool().execute(params)
+                    io.send_tool_output(result)
+
+                elif tool_name == "hv_write":
+                    from tools.hv_control_tool import HVControlTool
+                    io.send_status("HV 변경 중...")
+                    result = HVControlTool().execute(params)
+                    io.send_tool_output(result)
+
                 else:
-                    # single: fModule="" in C++ → trailing underscore in basePrefix
-                    base_prefix = f"Run{run_number}_single_{method}_"
+                    io.send_ai_message(f"알 수 없는 도구: {tool_name}")
 
-                pfx = f"{base_prefix}_"
-                canvases = [
-                    p.name[len(pfx):-len(".json")]
-                    for p in sorted(OUTPUT_DIR.glob(f"{base_prefix}_*.json"))
-                    if p.name.endswith(".json")
-                ]
-                if canvases:
-                    io.output_queue.put({
-                        "type": "dqm_canvases",
-                        "base_prefix": base_prefix,
-                        "canvases": canvases,
-                        "run_number": run_number,
-                    })
-                else:
-                    io.send_ai_message(f"Run {run_number} DQM JSON 파일을 찾을 수 없습니다.")
+                return  # 성공
 
-            elif tool_name in ("run_log", "run_log_read"):
-                from tools.run_log_tool import RunLogTool
-                result = RunLogTool().execute(params)
-                io.send_tool_output(result)
+            except RuntimeError as e:
+                last_error = e
+                self.log(f"[Retry {attempt}/{max_retries}] Tool '{tool_name}' 실패: {e}")
+                if attempt < max_retries:
+                    time.sleep(2)
 
-            elif tool_name == "hv_read":
-                from tools.hv_control_tool import HVControlTool
-                result = HVControlTool().execute(params)
-                io.send_tool_output(result)
+            except Exception as e:
+                io.send_ai_message(f"도구 실행 중 오류: {e}")
+                return
 
-            elif tool_name == "hv_write":
-                from tools.hv_control_tool import HVControlTool
-                io.send_status("HV 변경 중...")
-                result = HVControlTool().execute(params)
-                io.send_tool_output(result)
-
-            else:
-                io.send_ai_message(f"알 수 없는 도구: {tool_name}")
-
-        except Exception as e:
-            io.send_ai_message(f"도구 실행 중 오류: {e}")
+        io.send_tool_error(tool_name, str(last_error), max_retries)
 
 
 # ── Background worker loop ───────────────────────────────────────────────────

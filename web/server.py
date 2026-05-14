@@ -22,6 +22,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel
 
 from agents.agent_runner import AgentRunner
+from tools.hv_control_tool import HVControlTool
 
 
 # ── App ───────────────────────────────────────────────────────────────────────
@@ -29,12 +30,11 @@ app = FastAPI(title="autoTB Control Panel")
 
 STATIC_DIR = Path(__file__).parent / "static"
 PROJECT_ROOT = Path(__file__).parent.parent
-PLOT_DIR = PROJECT_ROOT / "DQM" / "output" / "dat_plots"
-PLOT_DIR.mkdir(parents=True, exist_ok=True)
 DQM_DIR = PROJECT_ROOT / "DQM"
 DQM_OUTPUT_DIR = DQM_DIR / "output"
 DQM_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 MANIFEST_PATH = PROJECT_ROOT / "dqm_dashboards.yml"
+PLOT_DIR = Path(tempfile.gettempdir())
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 app.mount("/plots", StaticFiles(directory=str(PLOT_DIR)), name="plots")
@@ -55,20 +55,7 @@ def _startup_brain():
     except Exception as e:
         print(f"⚠️ BrainAgent failed to load (will use fallback): {e}")
 
-# ── Whisper (lazy-loaded on first request) ────────────────────────────────────
-_whisper_model = None
-_whisper_lock = threading.Lock()
-
-def _get_whisper():
-    global _whisper_model
-    if _whisper_model is None:
-        with _whisper_lock:
-            if _whisper_model is None:
-                from faster_whisper import WhisperModel
-                _whisper_model = WhisperModel(
-                    "medium", device="cpu", compute_type="int8"
-                )
-    return _whisper_model
+from web.whisper_prompt import get_model as _get_whisper, PROMPT as _WHISPER_PROMPT, fix_physics as _fix_physics
 
 
 # ── Parsing helpers ────────────────────────────────────────────────────────────
@@ -102,9 +89,6 @@ _COL_ASK_MSG = (
     "  trigger_setup / hv_drc / hv_aux"
 )
 
-_PLOT_MODE_ASK_MSG = "어떤 플롯을 그릴까요?\n  waveform / peakADC / intADC / all"
-
-
 def _parse_log_column(text: str):
     """Return column key if a known column is mentioned, else None."""
     t = text.lower()
@@ -114,18 +98,6 @@ def _parse_log_column(text: str):
     return None
 
 
-def _parse_plot_mode(text: str):
-    """Return faster-whisper mode string if mentioned, else None."""
-    t = text.lower()
-    if re.search(r'waveform|웨이브\s*폼|웨이브폼|wave|파형', t):
-        return "wave"
-    if re.search(r'peakadc|peak', t):
-        return "peakADC"
-    if re.search(r'intadc|int\s*adc|integral|적분', t):
-        return "intADC"
-    if re.search(r'\ball\b|전부|모두|다\s*그려', t):
-        return "all"
-    return None
 
 
 def _extract_log_value(text: str, column: str):
@@ -163,11 +135,6 @@ def _parse_direct_command(text: str):
         value = _extract_log_value(t, column) if column else None
         return {"tool": "log_update", "run_number": run_number, "column": column, "value": value}
 
-    # DAQ plot: run number + plot keyword
-    m = re.search(r'(?:run\s*)?(\d{4,6}).*?(?:waveform|wave|파형|plot|그래프|그려|peakadc|intadc)', t, re.IGNORECASE)
-    if m:
-        mode = _parse_plot_mode(t)
-        return {"tool": "dat_plot", "run_number": int(m.group(1)), "mode": mode}
 
     # DAQ run: "100개 돌려줘" / "run 100"
     m = re.search(r'(?:run\s+)?(\d+)\s*(?:개|events?)', t, re.IGNORECASE)
@@ -192,27 +159,6 @@ def _run_direct_tool(cmd: dict, output_queue: queue.Queue, stop_event: threading
             DAQRunTool().execute({"events": cmd["events"]}, line_callback=io.send_tool_output)
             io.send_status("대기 중")
 
-        elif cmd["tool"] == "dat_plot":
-            from tools.dat_plot_tool import run_dat_plot
-            run_number = cmd["run_number"]
-            mode = cmd.get("mode", "all")
-            mode_label = {"wave": "Waveform", "peakADC": "PeakADC",
-                          "intADC": "IntADC", "all": "전체"}.get(mode, mode)
-            io.send_status("플롯 생성 중...")
-            io.send_ai_message(f"Run {run_number}  {mode_label} 플롯 생성 중...")
-            result = run_dat_plot(
-                run_number=run_number, mode=mode,
-                channels=[0, 1, 2, 3], max_events=200,
-            )
-            if result["status"] == "error":
-                output_queue.put({"type": "error", "content": result["message"]})
-            else:
-                io.send_tool_output(
-                    f"✅ Run {result['run_number']}  —  {result['events_processed']}개 / "
-                    f"채널 {result['channels']}"
-                )
-                io.send_plots(result["saved_files"])
-            io.send_status("대기 중")
 
     except Exception as e:
         output_queue.put({"type": "error", "content": str(e)})
@@ -251,42 +197,6 @@ _HELP_MSG = (
 )
 
 
-# Prompt as natural sentences so Whisper sees GeV in real context
-_WHISPER_PROMPT = (
-    "빔 에너지를 1 GeV, 3 GeV, 5 GeV로 설정합니다. "
-    "HV 고전압을 조정하고 ADC 값을 확인합니다. "
-    "DAQ로 1000개 이벤트를 수집합니다. "
-    "이벤트를 1만개 받겠습니다. waveform, peakADC, intADC 플롯을 확인합니다. "
-    "T1, T2, T3, T4, T5, T6, T7, T8, T9 타워를 캘리브레이션합니다. "
-    "완료."
-)
-
-# Post-processing: fix known Whisper mis-transcriptions for physics terms
-_CORRECTIONS = [
-    # GeV variants
-    (re.compile(r'\bG\s*[12e]?\s*V\b', re.IGNORECASE), 'GeV'),
-    (re.compile(r'\b기가\s*전자\s*볼트\b'),              'GeV'),
-    (re.compile(r'\b지이브이\b'),                        'GeV'),
-    # waveform — Korean pronunciation "웨이브 폼"
-    (re.compile(r'웨이브\s*폼'),                         'waveform'),
-    # other physics terms
-    (re.compile(r'\b에이디씨\b'),                        'ADC'),
-    (re.compile(r'\b다큐\b'),                            'DAQ'),
-    (re.compile(r'\b에이치브이\b'),                      'HV'),
-    (re.compile(r'\b케이에이치\b'),                      'KEK'),
-    # Remove commas inside numbers (e.g. "10,000" → "10000")
-    (re.compile(r'(\d),(\d{3})'),                        r'\1\2'),
-]
-
-_NUM_COMMA = re.compile(r'(\d),(\d{3})\b')
-
-def _fix_physics(text: str) -> str:
-    for pattern, replacement in _CORRECTIONS:
-        text = pattern.sub(replacement, text)
-    # Remove commas inside numbers (1,000 → 1000, 1,000,000 → 1000000)
-    while _NUM_COMMA.search(text):
-        text = _NUM_COMMA.sub(r'\1\2', text)
-    return text
 
 
 @app.post("/transcribe")
@@ -406,6 +316,93 @@ async def dqm_freeform():
     return FileResponse(str(STATIC_DIR / "dqm_freeform.html"))
 
 
+@app.get("/hv/check")
+async def hv_check_page():
+    """Standalone HV status viewer page."""
+    return FileResponse(str(STATIC_DIR / "hv_check.html"))
+
+
+@app.get("/api/hv/status-all")
+async def api_hv_status_all(expert: bool = False):
+    """Fetch HV status for all channels using HVControlTool.
+
+    expert=True: try extended fields (ramp up/down/max) as well.
+    """
+    try:
+        tool = HVControlTool()
+        if not expert:
+            result = tool.execute({"command": "status", "channels": "all"})
+            return {"ok": True, "output": result, "expert": False}
+
+        # Expert mode: single-shot command so all fields share same timestamp.
+        if not tool._ensure_connection():
+            return JSONResponse({"ok": False, "error": "HV SSH connection failed"}, status_code=500)
+
+        cmd = "./HVWrappdemo --ch all --Status --VMon --IMon --V0Set --I0Set --RUp --RDWn --SVMax"
+        stdout, stderr = tool._run_remote_command(cmd)
+        if not stdout or not stdout.strip():
+            return JSONResponse(
+                {"ok": False, "error": (stderr.strip() if stderr else "No output"), "command": cmd},
+                status_code=500,
+            )
+
+        lines = [
+            "📊 HV Status Query (Expert)",
+            "📋 Request: Channels all",
+            f"💻 Command: {cmd}",
+            "",
+            "📄 Output:",
+            *stdout.strip().split('\n'),
+        ]
+        if stderr and stderr.strip():
+            lines.extend(["", "⚠️ Stderr:", *stderr.strip().split('\n')])
+        return {"ok": True, "output": "\n".join(lines), "expert": True}
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/hv/expert-metrics")
+async def api_hv_expert_metrics():
+    """Return only expert metrics (RampUp/RampDown/Max) for all channels.
+
+    This is intentionally separate from /api/hv/status-all so the frontend can
+    refresh ramp/max less frequently than the main status.
+    """
+    try:
+        tool = HVControlTool()
+
+        if not tool._ensure_connection():
+            return JSONResponse({"ok": False, "error": "HV SSH connection failed"}, status_code=500)
+
+        # CAEN wrapper(MainWrapp.c) 기준 정확 파라미터명:
+        #  - Ramp up:   RUp
+        #  - Ramp down: RDWn
+        #  - Max:       SVMax
+        rup_cmd = "./HVWrappdemo --ch all --RUp"
+        rdown_cmd = "./HVWrappdemo --ch all --RDWn"
+        vmax_cmd = "./HVWrappdemo --ch all --SVMax"
+
+        def _run(cmd: str):
+            stdout, stderr = tool._run_remote_command(cmd)
+            return {
+                "ok": bool(stdout and stdout.strip()),
+                "command": cmd,
+                "output": stdout.strip() if stdout else "",
+                "stderr": stderr.strip() if stderr else "",
+            }
+
+        return {
+            "ok": True,
+            "expert_outputs": {
+                "rup": _run(rup_cmd),
+                "rdown": _run(rdown_cmd),
+                "vmax": _run(vmax_cmd),
+            },
+        }
+    except Exception as e:
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
+
+
 class MonitRequest(BaseModel):
     run_number: int
     type: str = "full"
@@ -479,7 +476,7 @@ async def api_run_monit(req: MonitRequest):
 
     generated_cmd = " ".join(cmd)
 
-    from agents.dqm_live_worker import _build_monit_env
+    from tools.dqm_live_worker import _build_monit_env
     monit_env = _build_monit_env()
 
     # LIVE mode: spawn without blocking, return immediately so the browser can
@@ -655,7 +652,9 @@ async def websocket_endpoint(ws: WebSocket):
     # and should go to BrainAgent instead of the scenario agent.
     # We use a single-element list so the nested pump_output coroutine can
     # mutate it without 'nonlocal' across tasks.
-    _cm = [False]   # _cm[0] == confirm_mode
+    _cm = [False]       # _cm[0] == confirm_mode (완료 button)
+    _hv_cm = [False]    # _hv_cm[0] == HV confirm mode (완료 + 수정 buttons)
+    _retry_cm = [False] # _retry_cm[0] == retry mode (다시 시도 button)
 
     async def pump_output():
         """
@@ -701,6 +700,12 @@ async def websocket_endpoint(ws: WebSocket):
                     # Track confirm mode: set when 완료 button should be shown
                     if msg.get("type") == "awaiting_input":
                         _cm[0] = True
+                    elif msg.get("type") == "awaiting_hv_confirm":
+                        _cm[0] = True
+                        _hv_cm[0] = True
+                    elif msg.get("type") == "awaiting_retry":
+                        _cm[0] = True
+                        _retry_cm[0] = True
 
                     if msg.get("type") == "tool_output" and not is_brain:
                         # Batch scenario tool_output (DAQ stdout etc.)
@@ -714,13 +719,14 @@ async def websocket_endpoint(ws: WebSocket):
                         except Exception:
                             pass
                         # After the brain's final ai_message, if the scenario
-                        # agent is still waiting for 완료 confirmation, re-show
-                        # the 완료 button so the operator knows the step is pending.
+                        # agent is still waiting for confirmation, re-show
+                        # the appropriate button(s).
                         if (msg.get("type") == "ai_message"
                                 and _cm[0]
                                 and runner.waiting_flag.is_set()):
                             try:
-                                await ws.send_json({"type": "awaiting_input"})
+                                retype = "awaiting_hv_confirm" if _hv_cm[0] else "awaiting_input"
+                                await ws.send_json({"type": retype})
                             except Exception:
                                 pass
                     else:
@@ -778,8 +784,17 @@ async def websocket_endpoint(ws: WebSocket):
                     #   → "완료"/"종료"/"exit"  → scenario (queue for next get_input)
                     #   → anything else         → Brain ad-hoc
                     if runner.waiting_flag.is_set():
-                        if content in ("완료", "종료", "exit"):
-                            _cm[0] = False   # 완료 button consumed
+                        if content == "retry" and _retry_cm[0]:
+                            _cm[0] = False
+                            _retry_cm[0] = False
+                            runner.send_input(content)
+                        elif content in ("완료", "종료", "exit"):
+                            _cm[0] = False
+                            _hv_cm[0] = False
+                            _retry_cm[0] = False
+                            runner.send_input(content)
+                        elif _hv_cm[0]:
+                            # HV modify mode: free text → scenario (not Brain)
                             runner.send_input(content)
                         elif _cm[0] and runner.brain_ready:
                             # 완료 button was shown → free text is an ad-hoc request
@@ -820,19 +835,6 @@ async def websocket_endpoint(ws: WebSocket):
                             daemon=True,
                         ).start()
 
-                    elif step == "plot_ask_mode":
-                        mode = _parse_plot_mode(content)
-                        if mode is None:
-                            await _send("ai_message", f"플롯 종류를 인식하지 못했습니다.\n{_PLOT_MODE_ASK_MSG}")
-                        else:
-                            cmd = {"tool": "dat_plot",
-                                   "run_number": pending["run_number"], "mode": mode}
-                            pending = None
-                            threading.Thread(
-                                target=_run_direct_tool,
-                                args=(cmd, runner.output_queue, runner.stop_event),
-                                daemon=True,
-                            ).start()
 
                 else:
                     cmd = _parse_direct_command(content)
@@ -868,18 +870,6 @@ async def websocket_endpoint(ws: WebSocket):
                                 daemon=True,
                             ).start()
 
-                    elif cmd["tool"] == "dat_plot":
-                        mode = cmd.get("mode")
-                        if mode is None:
-                            pending = {"step": "plot_ask_mode", "run_number": cmd["run_number"]}
-                            await _send("ai_message",
-                                        f"Run {cmd['run_number']} 플롯을 그립니다.\n{_PLOT_MODE_ASK_MSG}")
-                        else:
-                            threading.Thread(
-                                target=_run_direct_tool,
-                                args=(cmd, runner.output_queue, runner.stop_event),
-                                daemon=True,
-                            ).start()
 
                     else:
                         threading.Thread(
@@ -898,6 +888,9 @@ async def websocket_endpoint(ws: WebSocket):
                 else:
                     agent_name = data.get("agent")
                     params = data.get("params", {})
+                    _cm[0] = False      # reset confirm-mode from any previous session
+                    _hv_cm[0] = False
+                    _retry_cm[0] = False
                     try:
                         runner.start(agent_name, params)
                         await ws.send_json({

@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """
-HV Control Tool
-
-CAEN HV Supply 제어 Tool (SSH를 통한 원격 제어)
+HV Control Tool — CAEN HV Supply 제어 (SSH 원격)
 
 Available Commands:
 - 'voltage': 전압 설정 (requires: channels, voltage)
@@ -19,29 +17,6 @@ Channel Specification:
 - '0-5': 범위 지정
 - '0,2,4': 쉼표로 구분
 - 'T1C,T2C': Name으로 쉼표 구분
-- 'T1C-0': Name과 채널 번호 혼합
-
-Examples:
-    # 모든 채널 전압 1200V 설정
-    params = {"command": "voltage", "channels": "all", "voltage": 1200}
-    
-    # 채널 0, 1 전류 10μA 설정
-    params = {"command": "current", "channels": [0, 1], "current": 10}
-    
-    # Name으로 채널 지정
-    params = {"command": "voltage", "channels": ["T1C", "T2C"], "voltage": 1200}
-    
-    # Name과 채널 번호 혼합
-    params = {"command": "voltage", "channels": [0, "T1C"], "voltage": 1200}
-    
-    # channel_values에서 Name 사용
-    params = {"command": "voltage", "channel_values": {"T1C": 1200, "T2C": 1300}}
-    
-    # 모든 채널 켜기
-    params = {"command": "on", "channels": "all"}
-    
-    # 상태 확인
-    params = {"command": "status"}  # 기본값으로 모든 채널 조회
 """
 
 import json
@@ -99,81 +74,28 @@ class HVControlTool(BaseTool):
     
     def execute(self, params: Dict[str, Any]) -> str:
         """
-        HV 명령 실행
-        
         Args:
             params:
-                - command (str, required): 명령 타입
-                    * 'voltage': 전압 설정 (requires channels + voltage)
-                    * 'current': 전류 설정 (requires channels + current)
-                    * 'on': HV 켜기 (requires channels)
-                    * 'off': HV 끄기 (requires channels)
-                    * 'status': 상태 확인 (channels is optional, defaults to 'all')
-                
-                - channels (list or str, optional): 채널 지정
-                    * 'all' 또는 '전체': 모든 채널 (0-23)
-                    * [0, 1, 2]: 특정 채널 리스트 (채널 번호)
-                    * ['T1C', 'T2C']: Name으로 채널 지정 (대소문자 구분 없음)
-                    * [0, 'T1C', 'T2C']: 채널 번호와 Name 혼합 가능
-                    * '0-5': 범위 지정 (0부터 5까지)
-                    * '0,2,4': 쉼표로 구분된 채널
-                    * 'T1C,T2C': Name으로 쉼표 구분
-                
+                - command (str): 'voltage' | 'current' | 'on' | 'off' | 'status'
+                - channels (list or str, optional): 채널 지정 ('all', [0,1], ['T1C'], 범위 등)
                 - channel_values (dict, optional): 채널별 다른 값 설정
-                    * {'0': 1200, '1': 1300}: 채널 번호로 지정
-                    * {'T1C': 1200, 'T2C': 1300}: Name으로 지정
-                    * {'0': 1200, 'T1C': 1300}: 혼합 가능
                 - voltage (float, optional): 전압 값 (V)
                 - current (float, optional): 전류 값 (μA)
-        
-        Returns:
-            실행 결과 문자열
-        
-        Examples:
-            # 모든 채널 전압 설정
-            {"command": "voltage", "channels": "all", "voltage": 1200}
-            
-            # 특정 채널 전류 설정
-            {"command": "current", "channels": [0, 1, 2], "current": 10}
-            
-            # Name으로 채널 지정
-            {"command": "voltage", "channels": ["T1C", "T2C"], "voltage": 1200}
-            
-            # Name과 채널 번호 혼합
-            {"command": "voltage", "channels": [0, "T1C"], "voltage": 1200}
-            
-            # channel_values에서 Name 사용
-            {"command": "voltage", "channel_values": {"T1C": 1200, "T2C": 1300}}
-            
-            # 모든 채널 켜기
-            {"command": "on", "channels": "all"}
-            
-            # 특정 채널 끄기
-            {"command": "off", "channels": [0, 1]}
-            
-            # Name으로 상태 확인
-            {"command": "status", "channels": ["T1C", "T2C"]}
-            
-            # 상태 확인 (모든 채널)
-            {"command": "status"}  # channels 생략 시 기본값 'all'
         """
-        # 파라미터 검증
         valid, error = self.validate_params(params, ["command"])
         if not valid:
-            return f"❌ 파라미터 오류: {error}"
-        
+            raise RuntimeError(f"파라미터 오류: {error}")
+
         command = params["command"].lower()
-        
+
         try:
-            # SSH 연결 확인
             if not self._ensure_connection():
-                return (
-                    f"❌ SSH Connection Failed\n"
-                    f"📋 Target: {HV_SSH_CONFIG['host']}:{HV_SSH_CONFIG['port']}\n"
-                    f"💡 Check if the HV server is running and accessible"
+                raise RuntimeError(
+                    f"SSH Connection Failed — "
+                    f"{HV_SSH_CONFIG['host']}:{HV_SSH_CONFIG['port']} "
+                    f"에 연결할 수 없습니다. HV 서버가 실행 중인지 확인하세요."
                 )
-            
-            # 명령 타입에 따라 실행
+
             if command == "voltage":
                 return self._set_voltage(params)
             elif command == "current":
@@ -185,18 +107,18 @@ class HVControlTool(BaseTool):
             elif command == "status":
                 return self._get_status(params)
             else:
-                return (
-                    f"❌ Unsupported command: {command}\n"
-                    f"💡 Supported commands: voltage, current, on, off, status"
+                raise RuntimeError(
+                    f"Unsupported command: {command}. "
+                    f"Supported: voltage, current, on, off, status"
                 )
-        
+
+        except RuntimeError:
+            raise
         except Exception as e:
             import traceback
-            return (
-                f"❌ HV Control Error\n"
-                f"Error: {str(e)}\n\n"
-                f"Traceback:\n{traceback.format_exc()}"
-            )
+            raise RuntimeError(
+                f"HV Control Error: {str(e)}\n{traceback.format_exc()}"
+            ) from e
         
         finally:
             # SSH 연결 유지 (재사용을 위해)
@@ -204,13 +126,11 @@ class HVControlTool(BaseTool):
     
     def _set_voltage(self, params: Dict[str, Any]) -> str:
         """전압 설정"""
-        # 채널별 다른 값 설정
         if "channel_values" in params:
             channel_values = params["channel_values"]
             if not channel_values:
                 return "❌ channel_values가 비어있습니다"
             
-            # config.txt 읽기
             rows = self._read_config_rows()
             row_map = {row['ch']: row for row in rows}
             try:
@@ -218,10 +138,8 @@ class HVControlTool(BaseTool):
             except ValueError as e:
                 return str(e)
             
-            # 전압 업데이트
             resolved_channels = []
             for identifier, voltage in channel_values.items():
-                # Name 또는 채널 번호로 해석
                 ch_list = self._resolve_single_identifier(str(identifier), name_to_ch_map)
                 if not ch_list:
                     return f"❌ '{identifier}'에 해당하는 채널을 찾을 수 없습니다"
@@ -233,18 +151,14 @@ class HVControlTool(BaseTool):
                     row['V0Set'] = self._format_numeric(voltage)
                     resolved_channels.append(ch)
             
-            # config.txt 저장
             self._write_config_rows(rows)
             
-            # HV 명령 실행
             cmd = f"./HVWrappdemo --config {HV_CONFIG_RELATIVE_PATH} --Pw On"
             stdout, stderr = self._run_remote_command(cmd)
             
-            # 실제 프로그램 출력 그대로 반환
             output_lines = []
             output_lines.append("🔧 HV Voltage Command Executed")
             
-            # 요청 정보 (원본 identifier와 해석된 채널 번호 매핑)
             changes = []
             for identifier, voltage in channel_values.items():
                 ch_list = self._resolve_single_identifier(str(identifier), name_to_ch_map)
@@ -254,7 +168,6 @@ class HVControlTool(BaseTool):
             output_lines.append(f"💻 Command: {cmd}")
             output_lines.append("")
             
-            # 실제 출력
             if stdout and stdout.strip():
                 output_lines.append("📄 Output:")
                 output_lines.extend(stdout.strip().split('\n'))
@@ -266,9 +179,7 @@ class HVControlTool(BaseTool):
             
             return "\n".join(output_lines)
         
-        # 모든 채널에 같은 값 설정
         else:
-            # Planner 출력 호환성: channel → channels, value → voltage
             if "channel" in params and "channels" not in params:
                 params["channels"] = [params["channel"]]
             if "value" in params and "voltage" not in params:
@@ -287,29 +198,23 @@ class HVControlTool(BaseTool):
             
             voltage = float(params["voltage"])
             
-            # config.txt 읽기
             rows = self._read_config_rows()
             row_map = {row['ch']: row for row in rows}
             
-            # 전압 업데이트
             for ch in channels:
                 row = row_map.get(ch)
                 if not row:
                     return f"❌ Ch{ch}이(가) config.txt에 없습니다"
                 row['V0Set'] = self._format_numeric(voltage)
             
-            # config.txt 저장
             self._write_config_rows(rows)
             
-            # HV 명령 실행
             cmd = f"./HVWrappdemo --config {HV_CONFIG_RELATIVE_PATH} --Pw On"
             stdout, stderr = self._run_remote_command(cmd)
             
-            # 실제 프로그램 출력 그대로 반환
             output_lines = []
             output_lines.append("🔧 HV Voltage Command Executed")
             
-            # 요청 정보
             if len(channels) == 1:
                 output_lines.append(f"📋 Request: Ch{channels[0]} → {self._format_numeric(voltage)}V")
             else:
@@ -318,7 +223,6 @@ class HVControlTool(BaseTool):
             output_lines.append(f"💻 Command: {cmd}")
             output_lines.append("")
             
-            # 실제 출력
             if stdout and stdout.strip():
                 output_lines.append("📄 Output:")
                 output_lines.extend(stdout.strip().split('\n'))
@@ -332,13 +236,11 @@ class HVControlTool(BaseTool):
     
     def _set_current(self, params: Dict[str, Any]) -> str:
         """전류 설정"""
-        # 채널별 다른 값 설정
         if "channel_values" in params:
             channel_values = params["channel_values"]
             if not channel_values:
                 return "❌ channel_values가 비어있습니다"
             
-            # config.txt 읽기
             rows = self._read_config_rows()
             row_map = {row['ch']: row for row in rows}
             try:
@@ -346,10 +248,8 @@ class HVControlTool(BaseTool):
             except ValueError as e:
                 return str(e)
             
-            # 전류 업데이트
             resolved_channels = []
             for identifier, current in channel_values.items():
-                # Name 또는 채널 번호로 해석
                 ch_list = self._resolve_single_identifier(str(identifier), name_to_ch_map)
                 if not ch_list:
                     return f"❌ '{identifier}'에 해당하는 채널을 찾을 수 없습니다"
@@ -361,18 +261,14 @@ class HVControlTool(BaseTool):
                     row['I0Set'] = self._format_numeric(current)
                     resolved_channels.append(ch)
             
-            # config.txt 저장
             self._write_config_rows(rows)
             
-            # HV 명령 실행
             cmd = f"./HVWrappdemo --config {HV_CONFIG_RELATIVE_PATH} --Pw On"
             stdout, stderr = self._run_remote_command(cmd)
             
-            # 실제 프로그램 출력 그대로 반환
             output_lines = []
             output_lines.append("🔧 HV Current Command Executed")
             
-            # 요청 정보 (원본 identifier와 해석된 채널 번호 매핑)
             changes = []
             for identifier, current in channel_values.items():
                 ch_list = self._resolve_single_identifier(str(identifier), name_to_ch_map)
@@ -382,7 +278,6 @@ class HVControlTool(BaseTool):
             output_lines.append(f"💻 Command: {cmd}")
             output_lines.append("")
             
-            # 실제 출력
             if stdout and stdout.strip():
                 output_lines.append("📄 Output:")
                 output_lines.extend(stdout.strip().split('\n'))
@@ -394,9 +289,7 @@ class HVControlTool(BaseTool):
             
             return "\n".join(output_lines)
         
-        # 모든 채널에 같은 값 설정
         else:
-            # Planner 출력 호환성: channel → channels, value → current
             if "channel" in params and "channels" not in params:
                 params["channels"] = [params["channel"]]
             if "value" in params and "current" not in params:
@@ -415,29 +308,23 @@ class HVControlTool(BaseTool):
             
             current = float(params["current"])
             
-            # config.txt 읽기
             rows = self._read_config_rows()
             row_map = {row['ch']: row for row in rows}
             
-            # 전류 업데이트
             for ch in channels:
                 row = row_map.get(ch)
                 if not row:
                     return f"❌ Ch{ch}이(가) config.txt에 없습니다"
                 row['I0Set'] = self._format_numeric(current)
             
-            # config.txt 저장
             self._write_config_rows(rows)
             
-            # HV 명령 실행
             cmd = f"./HVWrappdemo --config {HV_CONFIG_RELATIVE_PATH} --Pw On"
             stdout, stderr = self._run_remote_command(cmd)
             
-            # 실제 프로그램 출력 그대로 반환
             output_lines = []
             output_lines.append("🔧 HV Current Command Executed")
             
-            # 요청 정보
             if len(channels) == 1:
                 output_lines.append(f"📋 Request: Ch{channels[0]} → {self._format_numeric(current)}μA")
             else:
@@ -446,7 +333,6 @@ class HVControlTool(BaseTool):
             output_lines.append(f"💻 Command: {cmd}")
             output_lines.append("")
             
-            # 실제 출력
             if stdout and stdout.strip():
                 output_lines.append("📄 Output:")
                 output_lines.extend(stdout.strip().split('\n'))
@@ -460,7 +346,6 @@ class HVControlTool(BaseTool):
     
     def _power_toggle(self, params: Dict[str, Any], state: str) -> str:
         """전원 On/Off"""
-        # Planner 출력 호환성: channel → channels
         if "channel" in params and "channels" not in params:
             params["channels"] = [params["channel"]]
         
@@ -475,15 +360,12 @@ class HVControlTool(BaseTool):
         if not channels:
             return "❌ 유효한 채널을 찾을 수 없습니다"
         
-        # HV 명령 실행
         cmd = f"./HVWrappdemo --config {HV_CONFIG_RELATIVE_PATH} --Pw {state}"
         stdout, stderr = self._run_remote_command(cmd)
         
-        # 실제 프로그램 출력 그대로 반환
         output_lines = []
         output_lines.append(f"🔧 HV Power {state} Command Executed")
         
-        # 요청 정보
         if len(channels) == 1:
             output_lines.append(f"📋 Request: Ch{channels[0]} → {state}")
         else:
@@ -492,7 +374,6 @@ class HVControlTool(BaseTool):
         output_lines.append(f"💻 Command: {cmd}")
         output_lines.append("")
         
-        # 실제 출력
         if stdout and stdout.strip():
             output_lines.append("📄 Output:")
             output_lines.extend(stdout.strip().split('\n'))
@@ -506,17 +387,14 @@ class HVControlTool(BaseTool):
     
     def _get_status(self, params: Dict[str, Any]) -> str:
         """상태 확인"""
-        # Planner 출력 호환성: channel → channels
         if "channel" in params and "channels" not in params:
             params["channels"] = [params["channel"]]
         
         channels = params.get("channels", "all")
         
-        # 채널 인자 생성 (Name을 채널 번호로 변환)
         if channels == "all" or channels == "전체":
             ch_arg = "all"
         else:
-            # Name과 채널 번호를 모두 채널 번호로 변환
             try:
                 resolved_channels = self._parse_channels(channels)
             except ValueError as e:
@@ -525,14 +403,11 @@ class HVControlTool(BaseTool):
             if not resolved_channels:
                 return "❌ 유효한 채널을 찾을 수 없습니다"
             
-            # 여러 채널인 경우 공백으로 구분
             ch_arg = " ".join(map(str, resolved_channels))
         
-        # HV 상태 조회 (여러 채널은 공백으로 구분하여 전달)
         command = f"./HVWrappdemo --ch {ch_arg} --Status --VMon --IMon --V0Set --I0Set"
         stdout, stderr = self._run_remote_command(command)
         
-        # 실제 프로그램 출력 그대로 반환
         output_lines = []
         output_lines.append("📊 HV Status Query")
         output_lines.append(f"📋 Request: Channels {ch_arg}")
@@ -540,7 +415,6 @@ class HVControlTool(BaseTool):
         output_lines.append(f"⏰ Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         output_lines.append("")
         
-        # 실제 출력
         if stdout and stdout.strip():
             output_lines.append("📄 Output:")
             output_lines.extend(stdout.strip().split('\n'))
@@ -656,7 +530,6 @@ class HVControlTool(BaseTool):
         """config.txt 쓰기"""
         sftp = self.ssh_client.open_sftp()
         try:
-            # 기존 파일 읽기
             with sftp.open(HV_CONFIG_FULL_PATH, 'r') as f:
                 content = f.read().decode('utf-8', errors='ignore')
             
@@ -671,20 +544,17 @@ class HVControlTool(BaseTool):
                     break
                 header_lines.append(line)
             
-            # 새 파일 구성
             new_lines = header_lines
             if channel_header_idx >= 0:
                 new_lines.append(original_lines[channel_header_idx])
             else:
                 new_lines.append("ch name V0Set I0Set")
             
-            # 채널 데이터 추가
             for row in sorted(rows, key=lambda r: r['ch']):
                 ch_id = row.get('ch_str', str(row['ch']))
                 line = f"{ch_id} {row['name']} {row['V0Set']} {row['I0Set']}"
                 new_lines.append(line)
             
-            # 파일 쓰기
             temp_path = f"{HV_CONFIG_FULL_PATH}.tmp"
             with sftp.open(temp_path, 'w') as f:
                 f.write("\n".join(new_lines) + "\n")
@@ -711,18 +581,15 @@ class HVControlTool(BaseTool):
             name = row.get('name', '').strip()
             ch = row['ch']
             
-            # None이면 무시
             if not name or name.lower() == 'none':
                 continue
             
-            # 대소문자 구분 없이 키로 사용
             name_key = name.upper()
             
             if name_key not in name_map:
                 name_map[name_key] = []
             name_map[name_key].append(ch)
         
-        # 중복 Name 체크
         duplicates = {name: ch_list for name, ch_list in name_map.items() if len(ch_list) > 1}
         if duplicates:
             dup_info = ', '.join([f"{name}(Ch{',Ch'.join(map(str, ch_list))})" 
@@ -734,26 +601,15 @@ class HVControlTool(BaseTool):
                 for name, ch_list in name_map.items()}
     
     def _resolve_single_identifier(self, identifier: str, name_to_ch_map: Dict[str, Any]) -> List[int]:
-        """
-        단일 식별자(Name 또는 채널 번호)를 채널 번호 리스트로 변환
-        
-        Args:
-            identifier: 채널 번호 문자열 또는 Name
-            name_to_ch_map: Name → 채널 번호 매핑
-        
-        Returns:
-            채널 번호 리스트 (없으면 빈 리스트)
-        """
+        """단일 식별자(Name 또는 채널 번호)를 채널 번호 리스트로 변환"""
         identifier = str(identifier).strip()
         
-        # 숫자로 시작하면 채널 번호로 해석
         if re.match(r'^\d+', identifier):
             try:
                 return [int(identifier)]
             except ValueError:
                 return []
         
-        # Name으로 해석 (대소문자 구분 없음)
         name_key = identifier.upper()
         if name_key in name_to_ch_map:
             ch = name_to_ch_map[name_key]
@@ -762,13 +618,7 @@ class HVControlTool(BaseTool):
         return []
     
     def _parse_channels(self, channels: Any) -> List[int]:
-        """
-        채널 표현을 리스트로 변환
-        - 채널 번호와 Name 모두 지원
-        - 대소문자 구분 없음
-        - None인 채널은 무시
-        """
-        # config.txt 읽기 (Name 매핑 필요)
+        """채널 표현을 리스트로 변환 (번호/Name 모두 지원, 대소문자 무시)"""
         rows = self._read_config_rows()
         name_to_ch_map = self._get_name_to_channel_map(rows)
         
@@ -787,19 +637,15 @@ class HVControlTool(BaseTool):
         for part in expr.split(','):
             part = part.strip()
             if '-' in part:
-                # 범위 처리: '0-5' 또는 'T1C-T5C' 같은 형태
                 start_str, end_str = part.split('-', 1)
                 start_str = start_str.strip()
                 end_str = end_str.strip()
                 
-                # 둘 다 숫자면 숫자 범위
                 if re.match(r'^\d+$', start_str) and re.match(r'^\d+$', end_str):
                     result.extend(range(int(start_str), int(end_str) + 1))
                 else:
-                    # Name 범위는 지원하지 않음 (에러)
-                    return []  # 또는 에러 반환
+                    return []
             else:
-                # 단일 식별자
                 ch_list = self._resolve_single_identifier(part, name_to_ch_map)
                 result.extend(ch_list)
         

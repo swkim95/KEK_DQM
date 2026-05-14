@@ -98,6 +98,46 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
   margin-right: 2px;
 }
 
+/* Tool error bubble — left panel, red */
+.tool-error-bubble {
+  background: #2d1515;
+  border: 1px solid var(--red);
+  border-left: 3px solid var(--red);
+  border-radius: 8px;
+  padding: 10px 14px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+  color: #e07070;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  animation: fadeIn 0.2s ease;
+}
+.tool-error-title {
+  display: block;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--red);
+  margin-bottom: 6px;
+  font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* 다시 시도 버튼 */
+.retry-row {
+  display: flex;
+  margin: -4px 0 4px 0;
+  animation: fadeIn 0.2s ease;
+}
+.inline-retry-btn {
+  padding: 7px 22px;
+  background: var(--red); color: #fff;
+  border: none; border-radius: 20px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.inline-retry-btn:hover  { background: #c0392b; }
+.inline-retry-btn:active { transform: scale(0.97); }
+.inline-retry-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
 /* User message (echo) */
 .user-bubble {
   align-self: flex-end;
@@ -136,6 +176,27 @@ html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif; backg
 }
 .inline-complete-btn:hover  { background: var(--green-h); }
 .inline-complete-btn:active { transform: scale(0.97); }
+
+.hv-confirm-row { flex-wrap: wrap; gap: 6px; align-items: flex-start; }
+.inline-modify-btn {
+  padding: 7px 18px;
+  background: #4a6fa5; color: #fff;
+  border: none; border-radius: 20px;
+  font-size: 14px; font-weight: 700; cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+}
+.inline-modify-btn:hover  { background: #3d5d8a; }
+.inline-modify-btn:active { transform: scale(0.97); }
+.hv-modify-area {
+  flex-basis: 100%;
+  display: flex; gap: 6px; align-items: center;
+  margin-top: 4px;
+}
+.hv-modify-input {
+  flex: 1; padding: 7px 10px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 6px; color: var(--text); font-size: 13px;
+}
 
 #text-row { display: flex; gap: 8px; }
 #chat-input {

@@ -1,9 +1,5 @@
 #!/usr/bin/env python3
-"""
-DQM Tool
-
-C++ monit 실행 → ROOT 파일 생성 → jsroot로 렌더링
-"""
+"""DQM Tool — C++ monit 실행으로 ROOT 파일 생성"""
 
 import os
 import subprocess
@@ -20,11 +16,9 @@ DQM_DIR = get_path_config("DqmDir")
 MONIT_EXECUTABLE = os.path.join(DQM_DIR, "monit")  # compile.sh로 생성됨
 DQM_OUTPUT_DIR = os.path.join(DQM_DIR, "output")
 
-# config_general.yml 경로 (monit 실행 시 전달용)
 from .config_loader import CONFIG_FILE as CONFIG_YML_PATH
 
 
-# output 디렉토리 생성
 os.makedirs(DQM_OUTPUT_DIR, exist_ok=True)
 
 
@@ -37,7 +31,6 @@ class DQMPlotTool(BaseTool):
             description="Generate DQM plots for test-beam data analysis"
         )
         
-        # Output 디렉토리 생성
         os.makedirs(DQM_OUTPUT_DIR, exist_ok=True)
     
     def execute(self, params: Dict[str, Any]) -> str:
@@ -57,7 +50,7 @@ class DQMPlotTool(BaseTool):
         """
         valid, error = self.validate_params(params, ["run_number"])
         if not valid:
-            return f"❌ 파라미터 오류: {error}"
+            raise RuntimeError(f"파라미터 오류: {error}")
 
         run_number = params["run_number"]
         method = params.get("method", "IntADC")
@@ -68,19 +61,19 @@ class DQMPlotTool(BaseTool):
         try:
             run_number = int(run_number)
             if run_number <= 0:
-                return "❌ Run 번호는 양수여야 합니다"
+                raise RuntimeError("Run 번호는 양수여야 합니다")
         except (TypeError, ValueError):
-            return f"❌ 잘못된 Run 번호: {run_number}"
+            raise RuntimeError(f"잘못된 Run 번호: {run_number}")
 
         if method not in ('PeakADC', 'IntADC'):
-            return f"❌ 잘못된 method: {method} (허용: IntADC, PeakADC)"
+            raise RuntimeError(f"잘못된 method: {method} (허용: IntADC, PeakADC)")
         if type_ not in ('full', 'heatmap', 'module', 'single'):
-            return f"❌ 잘못된 type: {type_} (허용: full, heatmap, module, single)"
+            raise RuntimeError(f"잘못된 type: {type_} (허용: full, heatmap, module, single)")
 
         if not os.path.exists(MONIT_EXECUTABLE):
-            return f"❌ monit 실행파일을 찾을 수 없습니다: {MONIT_EXECUTABLE}"
+            raise RuntimeError(f"monit 실행파일을 찾을 수 없습니다: {MONIT_EXECUTABLE}")
         if not os.path.exists(CONFIG_YML_PATH):
-            return f"❌ 설정 파일을 찾을 수 없습니다: {CONFIG_YML_PATH}"
+            raise RuntimeError(f"설정 파일을 찾을 수 없습니다: {CONFIG_YML_PATH}")
 
         # Resolve module string for heatmap/module (always MCPPMT)
         if type_ in ('heatmap', 'module'):
@@ -132,6 +125,10 @@ class DQMPlotTool(BaseTool):
 
             if result.returncode != 0:
                 output_lines.append(f"⚙️  monit 종료 (Exit Code: {result.returncode})")
+                if result.stderr and result.stderr.strip():
+                    output_lines.append(f"⚠️  stderr: {result.stderr.strip()[:400]}")
+                elif result.stdout and result.stdout.strip():
+                    output_lines.append(f"📄 stdout: {result.stdout.strip()[-300:]}")
             else:
                 output_lines.append("✅ monit 정상 종료")
 
@@ -152,8 +149,7 @@ class DQMPlotTool(BaseTool):
                 if matches:
                     root_filename = matches[0].name
                 else:
-                    output_lines.append(f"❌ ROOT 파일이 생성되지 않았습니다")
-                    return "\n".join(output_lines)
+                    raise RuntimeError("ROOT 파일이 생성되지 않았습니다")
 
             output_lines.append(f"📁 ROOT 파일: {root_filename}")
             output_lines.append("")
@@ -161,10 +157,11 @@ class DQMPlotTool(BaseTool):
 
             return "\n".join(output_lines)
 
+        except RuntimeError:
+            raise
         except subprocess.TimeoutExpired:
-            return (
-                f"⏱️  Plot 생성이 타임아웃되었습니다 (10분 초과)\n"
-                f"Run {run_number}의 데이터가 너무 큽니다."
+            raise RuntimeError(
+                f"Plot 생성 타임아웃 (10분 초과) — Run {run_number}의 데이터가 너무 큽니다."
             )
         except Exception as e:
-            return f"❌ Plot 생성 중 오류: {str(e)}"
+            raise RuntimeError(f"Plot 생성 중 오류: {str(e)}") from e

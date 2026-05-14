@@ -5,11 +5,12 @@ PMT 간 신호 균일화를 위한 HV 조정 도구 (peakADC 계산 통합)
 """
 
 import os
+import json
 import glob
 import numpy as np
-import pandas as pd
 import math
-from typing import Dict, Any, Optional, Tuple
+from pathlib import Path
+from typing import Dict, Any, Optional, Tuple, List
 
 try:
     from langchain_core.tools import tool
@@ -29,13 +30,44 @@ except ImportError:
 
 
 # ======================= Data Paths =======================
-from .config_loader import get_data_directory, get_mapping_csv_path, get_path_config
+from .config_loader import get_data_directory, get_mapping_root_path, get_path_config
 
 # Data paths (from config_general.yml)
 DATA_DIR = get_data_directory()
-MAPPING_PATH = get_mapping_csv_path()
+MAPPING_PATH = get_mapping_root_path()
 RUNNUM_PATH = get_path_config("RunNumberFile")
+DQM_OUTPUT_DIR = Path(get_path_config("DqmDir")) / "output"
 CS_LIST = ['C', 'S']
+
+
+# ======================= Mapping (ROOT) =======================
+
+def _load_mapping_from_root(root_path: str) -> List[dict]:
+    """
+    mapping_KEK.root의 mapping_DAQ 트리에서 mid/ch/name을 읽어 반환.
+    반환 형식: [{"mid": int, "ch": int, "name": str}, ...]
+    """
+    try:
+        import uproot
+        with uproot.open(root_path) as f:
+            tree = f["mapping_DAQ"]
+            arrays = tree.arrays(["mid", "ch", "name"], library="np")
+        return [
+            {"mid": int(m), "ch": int(c), "name": str(n)}
+            for m, c, n in zip(arrays["mid"], arrays["ch"], arrays["name"])
+        ]
+    except Exception:
+        return []
+
+
+_mapping_cache: Optional[List[dict]] = None
+
+
+def _get_mapping() -> List[dict]:
+    global _mapping_cache
+    if _mapping_cache is None:
+        _mapping_cache = _load_mapping_from_root(MAPPING_PATH)
+    return _mapping_cache
 
 # HV Control Tool import (autoTB 내부)
 try:
@@ -109,58 +141,43 @@ def compute_peakADC_100bin(wf: np.ndarray) -> Optional[float]:
 
 def collect_peakADC_for_run(run_num: int, cs_type: str, center: Optional[str] = None) -> list:
     """
-    Collect all peakADC values for a specific run and CS type
-    
+    Collect all peakADC values for a specific run and CS type.
+
     Args:
         run_num: Run 번호
         cs_type: 'C' 또는 'S'
         center: 타워 위치 (예: "T5"). 필수 (agent에서 제공)
     """
-    if not os.path.exists(MAPPING_PATH):
-        return []
-    
-    # Center는 필수 (agent에서 제공해야 함)
     if center is None:
         return []
-    
-    mapping_df = pd.read_csv(MAPPING_PATH)
+
+    target_name = f"{center}-{cs_type}"
+    mapping = _get_mapping()
+
     peakADC_values = []
-    
-    # sub_center 구성 (예: "T5-C")
-    sub_center = (center + f"-{cs_type}").strip()
-    
-    # Find mapping entries for this sub_center
-    mapping_rows = mapping_df[mapping_df['pmt'].astype(str).str.strip() == sub_center.strip()]
-    
-    for _, mrow in mapping_rows.iterrows():
-            if pd.isna(mrow['mid']) or pd.isna(mrow['ch']):
-                continue
-            mid = int(mrow['mid'])
-            ch = int(mrow['ch']) - 1  # Convert to 0-based indexing
-            if not (0 <= ch < 32):
-                continue
-            
-            # Construct file path pattern
-            pattern = os.path.join(DATA_DIR, f"Run_{run_num}/Run_{run_num}_Wave/Run_{run_num}_Wave_MID_{mid}/Run_{run_num}_Wave_MID_{mid}_FILE_*.dat")
-            target_files = glob.glob(pattern)
-            
-            if not target_files:
-                continue
-            
-            # Process all files for this MID
-            for target_file in target_files:
-                n_events = count_events_in_file(target_file)
-                
-                if n_events == 0:
-                    continue
-                
-                for event_idx in range(n_events):
-                    wf = load_dat_event(target_file, ch, event_idx)
-                    if wf is not None:
-                        peakADC = compute_peakADC_100bin(wf)
-                        if peakADC is not None:
-                            peakADC_values.append(peakADC)
-    
+    for entry in mapping:
+        if entry["name"].strip() != target_name:
+            continue
+        mid = entry["mid"]
+        ch = entry["ch"] - 1  # 0-based indexing
+
+        if not (0 <= ch < 32):
+            continue
+
+        pattern = os.path.join(
+            DATA_DIR,
+            f"Run_{run_num}/Run_{run_num}_Wave/Run_{run_num}_Wave_MID_{mid}"
+            f"/Run_{run_num}_Wave_MID_{mid}_FILE_*.dat"
+        )
+        for target_file in sorted(glob.glob(pattern)):
+            n_events = count_events_in_file(target_file)
+            for event_idx in range(n_events):
+                wf = load_dat_event(target_file, ch, event_idx)
+                if wf is not None:
+                    peakADC = compute_peakADC_100bin(wf)
+                    if peakADC is not None:
+                        peakADC_values.append(peakADC)
+
     return peakADC_values
 
 
@@ -257,33 +274,111 @@ def smart_valley_cut(values: list, min_valley_height_ratio: float = 0.1,
     return filtered_values
 
 
+def _read_peakADC_from_dqm_json(run_num: int, center: str, cs_type: str) -> Tuple[Optional[float], int]:
+    """
+    DQM live가 생성한 JSON 파일에서 TH1D peakADC mean 추출 (valley cut 적용).
+    DQM monit과 동일한 데이터 소스 사용.
+    """
+    tower_num = center[1:]  # "T1" → "1"
+    hist_name = f"{center}-{cs_type}"
+    json_path = DQM_OUTPUT_DIR / f"Run{run_num}_full_PeakADC_fCanvas_Tower{tower_num}.json"
+
+    if not json_path.exists():
+        return None, 0
+
+    try:
+        with open(json_path) as f:
+            canvas = json.load(f)
+
+        pads = canvas.get('fPrimitives', {}).get('arr', [])
+        for pad in pads:
+            prims = pad.get('fPrimitives', {}).get('arr', [])
+            for prim in prims:
+                if prim.get('_typename') != 'TH1D' or prim.get('fName') != hist_name:
+                    continue
+
+                ax = prim.get('fXaxis', {})
+                nbins = ax.get('fNbins', 0)
+                xmin = ax.get('fXmin', 0.0)
+                xmax = ax.get('fXmax', float(nbins))
+                if nbins <= 0:
+                    return None, 0
+
+                bin_width = (xmax - xmin) / nbins
+                farray = prim.get('fArray', [])
+                # fArray[0] = underflow, [1..nbins] = bins, [nbins+1] = overflow
+                counts = np.array(farray[1:nbins + 1], dtype=float)
+                centers = np.array([xmin + (i + 0.5) * bin_width for i in range(nbins)])
+
+                if counts.sum() <= 0:
+                    return None, 0
+
+                # Valley cut on histogram bins (mirrors smart_valley_cut logic)
+                if SCIPY_AVAILABLE:
+                    smooth = gaussian_filter1d(counts, sigma=2.0)
+                else:
+                    w = 5
+                    smooth = np.convolve(counts, np.ones(w) / w, mode='same')
+
+                min_peak_h = 0.05 * smooth.max()
+                peaks = [i for i in range(1, len(smooth) - 1)
+                         if smooth[i] > smooth[i - 1] and smooth[i] > smooth[i + 1]
+                         and smooth[i] > min_peak_h]
+
+                cut_idx = 0
+                if len(peaks) >= 2:
+                    main_peak = peaks[-1]
+                    for p in reversed(peaks[:-1]):
+                        valley_region = smooth[p:main_peak]
+                        vi = p + int(np.argmin(valley_region))
+                        if smooth[vi] / smooth[main_peak] < 0.1:
+                            cut_idx = vi
+                            break
+
+                zero_cut_idx = nbins
+                if peaks:
+                    for i in range(peaks[-1] + 1, nbins):
+                        if counts[i] == 0:
+                            zero_cut_idx = i
+                            break
+
+                sel_counts = counts[cut_idx:zero_cut_idx]
+                sel_centers = centers[cut_idx:zero_cut_idx]
+                w_sum = sel_counts.sum()
+                if w_sum <= 0:
+                    return None, 0
+
+                mean = float(np.dot(sel_counts, sel_centers) / w_sum)
+                return mean, int(w_sum)
+
+        return None, 0
+    except Exception:
+        return None, 0
+
+
 def calculate_valley_cut_average(run_num: int, cs_type: str, center: Optional[str] = None) -> Tuple[Optional[float], int]:
     """
-    Calculate average of peakADC values after valley cut
-    
-    Args:
-        run_num: Run 번호
-        cs_type: 'C' 또는 'S'
-        center: 타워 위치 (예: "T5"). None이면 CSV에서 자동 감지
+    DQM JSON 출력에서 peakADC mean 추출 (DQM monit과 동일한 방식).
+    JSON 없을 경우 raw .dat 파일 직접 읽기로 fallback.
     """
-    
-    # Collect peakADC data
+    if center is None:
+        return None, 0
+
+    # Primary: DQM JSON (monit과 동일한 데이터)
+    mean, count = _read_peakADC_from_dqm_json(run_num, center, cs_type)
+    if mean is not None:
+        return mean, count
+
+    # Fallback: raw .dat 직접 읽기
     peakADC_data = collect_peakADC_for_run(run_num, cs_type, center)
-    
     if len(peakADC_data) == 0:
         return None, 0
-    
-    # Apply valley cut
+
     filtered_data = smart_valley_cut(peakADC_data, min_valley_height_ratio=0.3, cut_at_zero=True)
-    
     if len(filtered_data) == 0:
         return None, 0
-    
-    # Calculate average
-    average = np.mean(filtered_data)
-    count = len(filtered_data)
-    
-    return average, count
+
+    return float(np.mean(filtered_data)), len(filtered_data)
 
 
 # ======================= Exponential Fitting =======================
@@ -406,8 +501,8 @@ class ExponentialHVPredictor:
     
     def predict_hv_adjustment(self, channel: str, current_hv: float,
                             current_adc: float, target_adc: float,
-                            tolerance: float = 0.03) -> Dict[str, Any]:
-        """단일 채널 HV 조정 예측. tolerance: ADC 허용 오차 비율 (기본 3%)"""
+                            tolerance: float = 0.01) -> Dict[str, Any]:
+        """단일 채널 HV 조정 예측. tolerance: ADC 허용 오차 비율 (기본 1%)"""
 
         # Done 상태면 skip — 단, 현재 ADC가 tolerance를 벗어났으면 재활성화
         if not self.is_channel_active(channel):
@@ -508,17 +603,14 @@ Target 유지: C={target_c} ADC, S={target_s} ADC
 사용법: get_peak_adc_averages(run_number)로 현재 ADC 확인 후
 hv_equalization_suggest로 HV 조정 제안 받으세요."""
     
-    def start_session(self, session_id: str, target_c: float, target_s: float, 
+    def start_session(self, session_id: str, target_c: float, target_s: float,
                      tower: str = "T5") -> str:
         """새로운 HV equalization 세션 시작"""
-        
-        if not self.exp_initialized:
-            self.exp_predictor.reset_data()
-            self.exp_initialized = True
-            exp_status = "새로운 세션 시작 - 실시간 exponential fitting"
-        else:
-            exp_status = "세션 진행 중 - 실시간 exponential fitting"
-        
+
+        # 항상 리셋: 중단된 테스트의 잔류 데이터가 다음 세션에 영향을 주는 것을 방지
+        self.exp_predictor.reset_data()
+        self.exp_initialized = True
+
         self.sessions[session_id] = {
             "target_c": target_c,
             "target_s": target_s,
@@ -760,11 +852,9 @@ _session_manager = HVEqualizationSession()
 # ======================= Fitting Visualization =======================
 
 def generate_fitting_summary(session_id: str = "default", tower: str = "T?",
-                             run_number: int = 0, output_dir: Optional[str] = None) -> dict:
+                             run_number: int = 0) -> dict:
     """
-    현재 세션의 HV Equalization 진행 상황을 시각화.
-    - 텍스트 테이블: 이터레이션별 (HV, ADC) 기록
-    - matplotlib 그래프: 데이터 포인트 + exp fitting 곡선 + target 선
+    현재 세션의 HV Equalization 진행 상황을 텍스트 테이블로 요약.
 
     Returns:
         {"table": str, "plot_path": str | None, "equation": str}
@@ -800,9 +890,10 @@ def generate_fitting_summary(session_id: str = "default", tower: str = "T?",
             eq_parts.append(f"{ch}: 탐색 중 (데이터 부족)")
     equation = "  |  ".join(eq_parts)
 
-    # ── matplotlib 그래프 ─────────────────────────────────────────
+    # ── matplotlib 그래프 (임시 파일로 생성) ─────────────────────────
     plot_path = None
     try:
+        import tempfile
         import matplotlib
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
@@ -825,12 +916,10 @@ def generate_fitting_summary(session_id: str = "default", tower: str = "T?",
 
             if hvs:
                 ax.scatter(hvs, adcs, color=colors[ch], zorder=5, s=60, label="Measured")
-                # 이터레이션 번호 표시
                 for i, (hv, adc) in enumerate(zip(hvs, adcs), 1):
                     ax.annotate(str(i), (hv, adc), textcoords="offset points",
                                 xytext=(6, 4), fontsize=8, color=colors[ch])
 
-            # 피팅 곡선
             if predictor.is_fitted.get(ch) and predictor.coefficients.get(ch) is not None:
                 A, B = predictor.coefficients[ch]
                 hv_min = min(hvs) - 20 if hvs else 750
@@ -839,37 +928,23 @@ def generate_fitting_summary(session_id: str = "default", tower: str = "T?",
                 ax.plot(hv_range, A * np.exp(B * hv_range),
                         color=colors[ch], alpha=0.6, linewidth=1.8,
                         label=f"A={A:.1f}, B={B:.5f}")
-                # 예측 HV
                 pred_hv = predictor.predict_hv_for_target(ch, targets[ch])
                 if pred_hv is not None:
                     ax.axvline(pred_hv, color=colors[ch], linestyle="--", alpha=0.5,
                                label=f"Pred HV={pred_hv:.0f}V")
 
-            # 목표 ADC 수평선
             ax.axhline(targets[ch], color="red", linestyle=":", linewidth=1.4, label=f"Target={targets[ch]}")
             ax.legend(fontsize=8)
             ax.grid(True, alpha=0.3)
 
         plt.tight_layout()
 
-        # 저장 경로
-        from pathlib import Path as _Path
-        if output_dir is None:
-            try:
-                from tools.config_loader import get_path_config
-                dqm_dir = get_path_config("DqmDir")
-            except Exception:
-                dqm_dir = "/Users/yhep/autoTB/DQM"
-            out_dir = _Path(dqm_dir) / "output" / "dat_plots"
-        else:
-            out_dir = _Path(output_dir)
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        fname = f"HV_fitting_{tower}_run{run_number}.png"
-        plot_path = str(out_dir / fname)  # out_dir is _Path
-        plt.savefig(plot_path, dpi=120, bbox_inches="tight",
-                    facecolor="#1a1a2e" if False else "white")
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=f"_HV_fitting_{tower}_run{run_number}.png", delete=False
+        )
+        plt.savefig(tmp.name, dpi=120, bbox_inches="tight")
         plt.close(fig)
+        plot_path = tmp.name
 
     except Exception as e:
         plot_path = None

@@ -1,5 +1,5 @@
-BaseDirectory: "/Users/yhep/autoTB/toydataset"
-Mapping: "/Users/yhep/autoTB/DQM/mapping/mapping_KEK.root"
+BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
+Mapping: "/Users/yhep/autoTB/DQM/mapping/toymapping.root"
 
 # ===== 경로 설정  =====
 Paths:
@@ -11,12 +11,11 @@ Paths:
   NoticeBase: "/Volumes/yhep/scratch/notice"
   KillMeFile: "/Volumes/yhep/scratch/notice/test/TB_daq/KILLME"
 
-  PositionResultsFile: "/Users/yhep/autoTB/position_scan_results/final_position_results.json"
   DqmDir: "/Users/yhep/autoTB/DQM"
 
 # ===== Mac Studio SSH =====
 StudioSSH:
-  Host: "169.254.170.175"
+  Host: "192.168.100.5"
   User: "yhep"
   KeyFile: "/Users/yhep/.ssh/id_ed25519"
 
@@ -30,6 +29,19 @@ HV:
   Paths:
     WrapperWorkDir: "/home/yoolab/Downloads/CAENHV/SY5527/CAENHVWrapper/HVWrapperDemo"
     ConfigFullPath: "/home/yoolab/Downloads/CAENHV/SY5527/CAENHVWrapper/config/config.txt"
+
+# ===== Position Scan 결과 (T5 기준 절대 좌표, mm) =====
+PositionScan:
+  OffsetX: 9933.0       # T5 중심 X 좌표 (mm)
+  OffsetY: 1066.0       # T5 중심 Y 좌표 (mm)
+  TowerWidth: 46.333    # X 방향 타워 간격 (mm)
+  TowerHeight: 50.0     # Y 방향 타워 간격 (mm)
+
+# ===== Position Calculator 물리 상수 =====
+PositionConstants:
+  TiltingAxis: 53.5         # mm, 드는 점부터 틸팅 축까지 거리
+  RotationAxisAngle: 11.72  # degree, Rotation axis 기준각
+  RotationAxisDist: 2.4     # mm, Rotation axis 거리
 
 AUX:
   WC:

@@ -12,13 +12,7 @@ def main():
     print("\n" + "="*70)
     print("⚡ Energy Scan Agent")
     print("="*70)
-
-    # Python-level 파싱 (모델에게 에너지 해석을 맡기지 않음)
-    print("\n에너지 설정을 자유롭게 입력하세요.")
-    print("예: 20:1000 40:1000")
-    print("    20GeV 100개, 40GeV 100개")
-    print("    1,2,3GeV 각각 100개씩")
-    print("    에너지는 10, 20, 30이고 모두 500개")
+    print("\n 에너지 설정을 입력하세요.")
 
     energy_config = {}
     while not energy_config:
@@ -26,7 +20,6 @@ def main():
         energy_config = _parse_energy_config(energy_input)
         if not energy_config:
             print("⚠️  형식을 인식하지 못했습니다. 다시 입력해주세요.")
-            print("    예) 20:1000 40:1000   또는   1GeV 100개 2GeV 100개")
 
     print(f"\n✅ 파싱 완료: {energy_config}")
 

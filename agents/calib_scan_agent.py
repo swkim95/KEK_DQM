@@ -1,18 +1,14 @@
 #!/usr/bin/env python3
-"""
-Calibration Scan Agent
-모든 타워(T1-T9)를 돌며 데이터 수집 자동화
-"""
+"""Calibration Scan Agent — 모든 타워(T1-T9)를 돌며 데이터 수집 자동화"""
 
 import json
 import sys
-from typing import Dict, Any, Optional, Union, List
+from typing import Dict, Any, Optional
 from pathlib import Path
 from datetime import datetime
 
-# 기존 tools import
 from tools.daq_tool import DAQRunTool
-from tools.position_calculator_tool import calculate_position
+
 
 from .base_agent import BaseAgent
 sys.path.append(str(Path(__file__).parent.parent))
@@ -28,7 +24,6 @@ class CalibScanAgent(BaseAgent):
         use_base_model: bool = True,
         io_handler=None,
     ):
-        # Model path 결정
         model_config = AGENT_MODELS["calibration"]
         if use_base_model:
             model_path = model_config["base_model"]
@@ -42,20 +37,18 @@ class CalibScanAgent(BaseAgent):
                 model_path = model_config["base_model"]
                 print(f"⚠️  Fine-tuned 모델 없음. Base model 사용 ({model_path})")
         
-        # Base Agent 초기화
         super().__init__(
             model_path=model_path,
             agent_name="Calibration",
             io_handler=io_handler,
         )
         
-        # Tool 인스턴스 생성
         self.daq_tool = DAQRunTool()
         
-        # 타워 이동 순서 (Zigzag)
+        # Zigzag 순서
         self.tower_order = ["T1", "T2", "T3", "T6", "T5", "T4", "T7", "T8", "T9"]
         
-        # 타워별 위치 정보 미리 계산 (Calibration은 각도 0,0 고정)
+        # Calibration은 rot=0, tilt=0 고정
         self.tower_positions = {}
         from tools.position_calculator_tool import get_calculator
         calc = get_calculator()
@@ -66,7 +59,6 @@ class CalibScanAgent(BaseAgent):
             else:
                 print(f"⚠️  Warning: {tower} 위치 계산 실패")
 
-        # State 초기화
         self.state = {
             "phase": "config" if beam_energy is None or target_events is None else "idle",
             "beam_energy": beam_energy,
@@ -159,11 +151,14 @@ When ALL towers are completed, output:
         total = len(self.tower_order)
         return f"Phase: {phase} | Tower: {current_tower} ({tower_idx + 1}/{total})"
 
-    # Fields the LLM is not allowed to overwrite
-    _PROTECTED_FIELDS = frozenset({
-        "target_events", "beam_energy", "tower_order",
-        "start_time", "plot_method", "daq_config",
+    # Fields that can never be overwritten by the LLM under any circumstances.
+    _ALWAYS_PROTECTED = frozenset({
+        "tower_order", "start_time", "plot_method", "daq_config",
     })
+    # Fields that become read-only once set (not None/0).
+    # During STEP 0 config phase they're None → LLM is allowed to initialise them.
+    # After STEP 0 they hold real values → any further LLM change is rejected.
+    _ONCE_SET_PROTECTED = frozenset({"beam_energy", "target_events"})
 
     def _update_state(self, updates: Dict[str, Any]):
         """State 업데이트"""
@@ -180,17 +175,19 @@ When ALL towers are completed, output:
                         else:
                             self.state["tower_status"][t].update(v)
                         self.log(f"State updated: tower_status[{t}] = {v}")
-                # EM의 energy_config 방식과 동일: tower_status 변경 후 idx 자동 산출
                 completed_count = sum(
                     1 for s in self.state["tower_status"].values() if s.get("completed")
                 )
                 self.state["current_tower_idx"] = completed_count
                 self.log(f"current_tower_idx 자동 갱신: {completed_count}")
             elif key == "current_tower_idx":
-                # 모델이 직접 출력해도 무시 — tower_status 기반으로 자동 관리
+                # tower_status 기반 자동 관리 — LLM 직접 설정 무시
                 self.log(f"current_tower_idx 직접 설정 무시 (tower_status 기반 자동 관리)")
-            elif key in self._PROTECTED_FIELDS:
+            elif key in self._ALWAYS_PROTECTED:
                 self.log(f"WARNING: LLM tried to update protected field '{key}' = {value} — rejected")
+            elif key in self._ONCE_SET_PROTECTED and self.state.get(key) is not None:
+                # Already initialised → reject mid-scan changes
+                self.log(f"WARNING: LLM tried to overwrite already-set '{key}' = {value} — rejected")
             else:
                 self.state[key] = value
                 self.log(f"State updated: {key} = {value}")
@@ -209,7 +206,10 @@ When ALL towers are completed, output:
 
             # DAQ 실행. daq_tool 내부에서 dqm_session.start()이 monit --LIVE를 띄워
             # DAQ 동안 우측 하단 DQM 패널이 실시간 갱신된다 — 여기가 유일한 플롯 경로.
-            result = self.daq_tool.execute(params, line_callback=self.io.send_tool_output)
+            result = self._run_tool_with_retry(
+                lambda: self.daq_tool.execute(params, line_callback=self.io.send_tool_output),
+                "daq_run_tool",
+            )
 
             run_number = self._extract_run_number(result)
             if run_number:
@@ -304,7 +304,6 @@ When ALL towers are completed, output:
                 if message:
                     self.io.send_ai_message(message)
                     self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
-                    # 완료 메시지는 입력 없이 자동 종료
                     if "모든 타워에 대한 스캔이 완료되었습니다" in message:
                         self.log("모든 타워 스캔 완료 - 자동 종료")
                         break

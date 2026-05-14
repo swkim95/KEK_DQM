@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-Run Log Tool (Google Spreadsheet Version)
-실험 로그를 Google Spreadsheet에 실시간으로 기록하는 Tool
-"""
+"""Run Log Tool — Google Spreadsheet에 실험 로그 기록"""
 
 import os
 import gspread
@@ -13,6 +10,7 @@ from pathlib import Path
 
 from .base_tool import BaseTool
 from .config_loader import get_path_config
+from .hv_control_tool import HVControlTool
 
 # ===== 경로 및 설정 (Config from YAML) =====
 RUNNUM_FILE = get_path_config("RunNumberFile")
@@ -52,21 +50,16 @@ class RunLogTool(BaseTool):
 
     def execute(self, params: Dict[str, Any]) -> str:
         """
-        로그 기록 또는 업데이트 실행
-        
         Args:
             params:
-                - command (str, optional): "write" (새 행 추가) 또는 "update" (기존 행 수정)
-                - run_num (str, optional): Run 번호 (update 시 필수, 미입력 시 마지막 행)
-                - program (str, optional): 프로그램 이름
-                - notes (str, optional): 비고/메모
-                - evts, start_time, end_time, config: (write 시 사용)
+                - command (str): "write" | "update" | "read"
+                - run_num, program, notes, evts, start_time, end_time, config
         """
         if not self._authenticate():
-            return "❌ Google Spreadsheet 인증에 실패했습니다."
+            raise RuntimeError("Google Spreadsheet 인증에 실패했습니다.")
 
         command = params.get("command", "write")
-        
+
         if command == "write":
             return self._write_row(params)
         elif command == "update":
@@ -74,11 +67,92 @@ class RunLogTool(BaseTool):
         elif command == "read":
             return self._read_row(params)
         else:
-            return f"❌ 지원하지 않는 명령입니다: {command}"
+            raise RuntimeError(f"지원하지 않는 명령입니다: {command}")
+
+    # Path to the fixed HV reference file — READ ONLY, never write to this file
+    _FIXED_HV_PATH = Path(__file__).parent.parent / "fixed_hv.txt"
+
+    @staticmethod
+    def _parse_fixed_hv(path: Path) -> Dict[str, str]:
+        """fixed_hv.txt 파싱 → {CHANNEL: vset} dict"""
+        result = {}
+        with open(path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                if ":" in line:
+                    ch, val = line.split(":", 1)
+                    result[ch.strip().upper()] = val.strip()
+        return result
+
+    def _build_hv_drc_string(self, name_to_vset: Dict[str, str]) -> str:
+        """fixed_hv.txt 유무에 따라 DRC HV 문자열 생성"""
+        if self._FIXED_HV_PATH.exists():
+            fixed = self._parse_fixed_hv(self._FIXED_HV_PATH)
+            diff_lines = []
+            for i in range(1, 10):
+                parts = []
+                for suffix in ("S", "C"):
+                    name = f"T{i}{suffix}"
+                    cur = name_to_vset.get(name, "")
+                    if cur and cur != fixed.get(name, ""):
+                        parts.append(f"{name}: {cur}")
+                if parts:
+                    diff_lines.append(", ".join(parts))
+            if not diff_lines:
+                return "Same as Fixed HV"
+            return "Compared to Fixed HV\n" + "\n".join(diff_lines)
+        else:
+            lines = []
+            for i in range(1, 10):
+                parts = []
+                for suffix in ("S", "C"):
+                    name = f"T{i}{suffix}"
+                    if name in name_to_vset and name_to_vset[name] != "":
+                        parts.append(f"{name}:{name_to_vset[name]}")
+                if parts:
+                    lines.append(" ".join(parts))
+            return "\n".join(lines)
+
+    def _collect_hv_vset_snapshot(self) -> Dict[str, str]:
+        """
+        HV config에서 채널별 V0Set snapshot 수집.
+        - Aux: Trig1, Trig2
+        - DRC: fixed_hv.txt 존재 시 비교, 없으면 전체 출력
+        """
+        hv = HVControlTool()
+        try:
+            if not hv._ensure_connection():
+                return {"hv_drc": "", "hv_aux": ""}
+
+            rows = hv._read_config_rows()
+            name_to_vset = {}
+            for row in rows:
+                name = str(row.get("name", "")).strip()
+                if not name or name.lower() == "none":
+                    continue
+                name_to_vset[name.upper()] = str(row.get("V0Set", "")).strip()
+
+            aux_names = ["TRIG1", "TRIG2"]
+            hv_aux = ", ".join(
+                f"{name}:{name_to_vset[name]}"
+                for name in aux_names
+                if name in name_to_vset and name_to_vset[name] != ""
+            )
+            hv_drc = self._build_hv_drc_string(name_to_vset)
+            return {"hv_drc": hv_drc, "hv_aux": hv_aux}
+        except Exception:
+            return {"hv_drc": "", "hv_aux": ""}
+        finally:
+            try:
+                if hv.ssh_client:
+                    hv.ssh_client.close()
+            except Exception:
+                pass
 
     def _write_row(self, params: Dict[str, Any]) -> str:
         """새로운 로그 행 추가 (DAQ 호출용)"""
-        # Run 번호 가져오기
         run_num = params.get("run_num")
         if not run_num:
             try:
@@ -97,7 +171,6 @@ class RunLogTool(BaseTool):
         config = params.get("config", "")
         notes = params.get("notes", "")
         
-        # 추가 정보 (Position, Energy 등)
         def safe_round(val, digits=1):
             if val == "" or val is None:
                 return ""
@@ -112,6 +185,13 @@ class RunLogTool(BaseTool):
         pos_tilt = safe_round(params.get("pos_tilt", ""))
         beam_energy = params.get("beam_energy", "")
 
+        hv_drc = params.get("hv_drc", "")
+        hv_aux = params.get("hv_aux", "")
+        if hv_drc == "" and hv_aux == "":
+            hv_snapshot = self._collect_hv_vset_snapshot()
+            hv_drc = hv_snapshot.get("hv_drc", "")
+            hv_aux = hv_snapshot.get("hv_aux", "")
+
         # 실제 시트 컬럼 순서 (스크린샷 기준)
         # B(2): Program | C(3): Run # | D(4): evts | E(5): Time(start) | F(6): Time(end)
         # G(7): HV DRC | H(8): HV Aux | I(9): Pos H | J(10): Pos V | K(11): Pos Rot | L(12): Pos Tilt
@@ -123,14 +203,14 @@ class RunLogTool(BaseTool):
             evts,           # D: evts
             start_time,     # E: Time (start)
             end_time,       # F: Time (end)
-            "",             # G: HV DRC
-            "",             # H: HV Aux
+            hv_drc,         # G: HV DRC
+            hv_aux,         # H: HV Aux
             pos_h,          # I: Position H
             pos_v,          # J: Position V
             pos_rot,        # K: Position Rot
             pos_tilt,       # L: Position Tilt
             "",             # M: Trigger Setup
-            "",             # N: Beam Type
+            "e-",           # N: Beam Type
             beam_energy,    # O: Beam Energy
             "",             # P: Beam Rate
             config,         # Q: Config
@@ -138,8 +218,7 @@ class RunLogTool(BaseTool):
         ]
 
         try:
-            # 1. 마지막 데이터 행 찾기 (Run #가 있는 C열 기준)
-            # col_values(3)은 C열의 모든 값을 가져옵니다.
+            # 마지막 데이터 행 찾기 (Run #가 있는 C열 기준)
             col_c_values = self.sheet.col_values(3)
             next_row = len(col_c_values) + 1
             
@@ -147,13 +226,12 @@ class RunLogTool(BaseTool):
             if next_row < 6:
                 next_row = 6
             
-            # 2. 데이터 업데이트 (B열 ~ R열)
             range_label = f"B{next_row}:R{next_row}"
             self.sheet.update(range_label, [row], value_input_option='USER_ENTERED')
             
             return f"✅ 새 Run 로그 추가 완료 (Run: {run_num}, Row: {next_row})"
         except Exception as e:
-            return f"❌ 로그 추가 실패: {str(e)}"
+            raise RuntimeError(f"로그 추가 실패: {str(e)}") from e
 
     # Header row index (1-based) and column mapping for read
     _HEADER_ROW = 5
@@ -177,7 +255,7 @@ class RunLogTool(BaseTool):
                     target_row = row
                     break
             if target_row is None:
-                return f"❌ Run {run_num}을 시트에서 찾을 수 없습니다."
+                raise RuntimeError(f"Run {run_num}을 시트에서 찾을 수 없습니다.")
 
             lines = [f"📋 Run {run_num} 로그:"]
             for col_idx, label in sorted(self._READ_COLUMNS.items()):
@@ -185,8 +263,10 @@ class RunLogTool(BaseTool):
                 if val:
                     lines.append(f"  {label}: {val}")
             return "\n".join(lines)
+        except RuntimeError:
+            raise
         except Exception as e:
-            return f"❌ 로그 조회 실패: {str(e)}"
+            raise RuntimeError(f"로그 조회 실패: {str(e)}") from e
 
     # Column name → (sheet column index, display label)
     UPDATABLE_COLUMNS = {
@@ -204,7 +284,6 @@ class RunLogTool(BaseTool):
         """기존 로그 행 업데이트 (UPDATABLE_COLUMNS 에 있는 모든 열 지원)"""
         run_num = params.get("run_num")
 
-        # Collect columns to update: {"column_key": value}
         to_update = {
             col: params[col]
             for col in self.UPDATABLE_COLUMNS
@@ -228,7 +307,7 @@ class RunLogTool(BaseTool):
                 run_num = all_data[-1][2] if len(all_data[-1]) > 2 else "Last"
 
             if target_row_idx <= 1:
-                return f"❌ Run {run_num}을 시트에서 찾을 수 없습니다."
+                raise RuntimeError(f"Run {run_num}을 시트에서 찾을 수 없습니다.")
 
             updates = []
             for col_key, value in to_update.items():
@@ -238,5 +317,7 @@ class RunLogTool(BaseTool):
 
             return f"✅ Run {run_num} 업데이트 완료: {', '.join(updates)}"
 
+        except RuntimeError:
+            raise
         except Exception as e:
-            return f"❌ 로그 업데이트 실패: {str(e)}"
+            raise RuntimeError(f"로그 업데이트 실패: {str(e)}") from e

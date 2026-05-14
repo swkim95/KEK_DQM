@@ -28,7 +28,8 @@ def _parse_energy_config(text: str) -> dict:
     Parse user energy input into {energy_GeV: n_events} dict.
     Handles common formats:
       "20:1000 40:1000"
-      "1GeV 100개 2GeV 100개"
+      "1GeV 100개 2GeV 200개"
+      "1,2,3GeV 1000개, 4GeV 2000개"
       "20, 40GeV 각각 1000개"
     Returns empty dict if parsing fails.
     """
@@ -37,19 +38,46 @@ def _parse_energy_config(text: str) -> dict:
     if colon_pairs:
         return {int(float(e)): int(n) for e, n in colon_pairs}
 
-    # Format 2: "1GeV 100개 2GeV 100개"  (energy-events pairs)
-    gev_pairs = re.findall(
-        r'(\d+(?:\.\d+)?)\s*[Gg][Ee][Vv]?\s+(\d+)\s*(?:개|events?)?', text
-    )
-    if gev_pairs:
-        return {int(float(e)): int(n) for e, n in gev_pairs}
+    result = {}
 
-    # Format 3: "20, 40GeV 각각 1000개"  (multiple energies, shared event count)
-    energies = re.findall(r'(\d+(?:\.\d+)?)\s*[Gg][Ee][Vv]?', text)
+    # Format 2: comma/space-grouped energies with per-group event counts.
+    # Captures "1,2,3GeV 1000개" and "1GeV 100개 2GeV 200개" correctly.
+    # The key change vs the old Format 2: [\d,\s\.]+ before GeV lets us grab
+    # comma-separated lists like "1,2,3" instead of just the last digit "3".
+    group_re = re.compile(
+        r'([\d,\s\.]+?)\s*[Gg][Ee][Vv]?\s+(\d+)\s*(?:개|events?)',
+        re.IGNORECASE,
+    )
+    for m in group_re.finditer(text):
+        energy_str, events_str = m.group(1), m.group(2)
+        events = int(events_str)
+        for e_m in re.finditer(r'\d+(?:\.\d+)?', energy_str):
+            result[int(float(e_m.group()))] = events
+    if result:
+        return result
+
+    # Format 2.5: plain "NGeV M" pairs without 개 — "1GeV 2000 3GeV 3000 4GeV 5000"
+    # Runs only when Format 2 found nothing (no 개/events in input).
+    plain_pairs = re.findall(
+        r'(\d+(?:\.\d+)?)\s*[Gg][Ee][Vv]?\s+(\d+)',
+        text,
+        re.IGNORECASE,
+    )
+    if plain_pairs:
+        return {int(float(e)): int(n) for e, n in plain_pairs}
+
+    # Format 3: "20, 40GeV 각각 1000개", "1,2,3,4GeV 모두 500개" — multiple energies,
+    # one shared count.  Uses the same comma-group extraction as Format 2 so that
+    # "20, 40GeV" correctly yields both 20 and 40 (old regex only found 40).
+    energy_blocks = re.findall(r'([\d,\s\.]+?)\s*[Gg][Ee][Vv]', text)
+    energies = []
+    for block in energy_blocks:
+        for e_m in re.finditer(r'\d+(?:\.\d+)?', block):
+            energies.append(int(float(e_m.group())))
     events_m = re.search(r'(\d+)\s*(?:개|events?)', text)
     if energies and events_m:
         evts = int(events_m.group(1))
-        return {int(float(e)): evts for e in energies}
+        return {e: evts for e in energies}
 
     return {}
 
@@ -119,7 +147,7 @@ def run_agent_thread(
     io = WebSocketIO(input_queue, output_queue, stop_event, waiting_flag=waiting_flag)
 
     try:
-        io.send_status(f"{agent_name} 에이전트 시작 중...")
+        io.send_status(f"{agent_name} 에이전트 실행 중")
         # _output_queue is consumed by DAQRunTool to push DQM live events
         # back to the browser without taking io_handler as a dependency.
         update_shared_state({"agent_type": agent_name, "_output_queue": output_queue})
@@ -128,49 +156,11 @@ def run_agent_thread(
         if agent_name == "em_scan":
             from agents.energy_scan_agent import EnergyScanAgent
 
-            # Ask for energy config, parse with Python (don't rely on base LLM)
-            energy_config = {}
-            while not energy_config:
-                io.send_ai_message(
-                    "에너지 설정을 입력해주세요.\n"
-                    "예) 20:1000 40:1000   또는   1GeV 100개 2GeV 100개"
-                )
-                energy_input = io.get_input()
-                if energy_input in ("종료", "exit"):
-                    output_queue.put({"type": "agent_done"})
-                    return
-                energy_config = _parse_energy_config(energy_input)
-                if not energy_config:
-                    io.send_ai_message(
-                        "⚠️ 형식을 인식하지 못했습니다. 다시 입력해주세요.\n"
-                        "예) 20:1000 40:1000"
-                    )
-
             agent = EnergyScanAgent(
-                energy_config=energy_config,   # parsed dict → phase starts "idle"
+                energy_config={},
                 use_base_model=params.get("use_base_model", False),
                 io_handler=io,
             )
-
-            # Inject synthetic STEP-0 history so the model sees energy config was
-            # already parsed by Python and jumps straight to STEP 1 (T5 movement).
-            # Without this, a retrained model may repeat STEP 0 or ask for energy again.
-            energy_config_snapshot = {
-                str(k): {
-                    "target_events": v, "collected_events": 0,
-                    "runs": [], "completed": False, "completed_at": None,
-                }
-                for k, v in energy_config.items()
-            }
-            agent.add_to_history("user", energy_input)
-            agent.add_to_history("assistant", json.dumps({
-                "tool": "none",
-                "update_state": {
-                    "energy_config": energy_config_snapshot,
-                    "scan_order": sorted(energy_config.keys()),
-                    "phase": "idle",
-                },
-            }, ensure_ascii=False))
 
         # ── Calibration Scan ─────────────────────────────────────────────────
         elif agent_name == "calib_scan":
@@ -188,7 +178,6 @@ def run_agent_thread(
             _HV_TOWER_ORDER = ["T1", "T2", "T3", "T6", "T5", "T4", "T7", "T8", "T9"]
             _is_sim = (agent_name == "hv_equalization_sim")
 
-            # Config 수집 (Python에서 한 번만)
             def _ask_float(prompt):
                 while True:
                     io.send_ai_message(prompt)
@@ -218,7 +207,6 @@ def run_agent_thread(
                 "current_energy": beam_energy,
             })
 
-            # HV 세션 초기화
             from tools.hv_equalization_tool import hv_equalization_start
             result = hv_equalization_start.invoke({
                 "target_c": target_adc, "target_s": target_adc,
@@ -228,7 +216,6 @@ def run_agent_thread(
             )
             io.send_tool_output(result)
 
-            # 타워 루프
             AgentClass = None
             if _is_sim:
                 from agents.hv_equalization_sim_agent import HVEqualizationSimAgent
@@ -263,8 +250,15 @@ def run_agent_thread(
                 _hv_sync_stop.set()
                 io.send_status(f"✅ {tower} 완료")
 
-            io.send_ai_message("모든 타워 HV Equalization이 완료되었습니다.")
-            io.send_status("완료")
+            if not stop_event.is_set():
+                io.send_ai_message("모든 타워 HV Equalization이 완료되었습니다.")
+                try:
+                    from hv_equalization_scan import _write_fixed_hv
+                    _write_fixed_hv()
+                    io.send_status("✅ fixed_hv.txt 업데이트 완료")
+                except Exception as _fhv_err:
+                    io.send_status(f"⚠️ fixed_hv.txt 업데이트 실패: {_fhv_err}")
+            io.send_status("모델 언로드 중...")
             clear_shared_state()
             output_queue.put({"type": "agent_done"})
             return
@@ -287,13 +281,13 @@ def run_agent_thread(
             agent.run()
         _sync_stop.set()
 
-        io.send_status("완료")
+        io.send_status("모델 언로드 중...")
         clear_shared_state()
         output_queue.put({"type": "agent_done"})
 
     except StopAgentException:
         clear_shared_state()
-        output_queue.put({"type": "status", "content": "에이전트가 중지되었습니다."})
+        output_queue.put({"type": "status", "content": "모델 언로드 중..."})
         output_queue.put({"type": "agent_done"})
 
     except Exception as e:
@@ -315,17 +309,15 @@ class AgentRunner:
     """
 
     def __init__(self):
-        # Scenario agent
         self.thread: Optional[threading.Thread] = None
         self.input_queue: queue.Queue = queue.Queue()
         self.output_queue: queue.Queue = queue.Queue()
         self.stop_event: threading.Event = threading.Event()
-        self.waiting_flag: threading.Event = threading.Event()  # set when scenario blocks on get_input()
+        self.waiting_flag: threading.Event = threading.Event()
 
-        # BrainAgent (ad-hoc)
         self.adhoc_queue: queue.Queue = queue.Queue()
-        self.confirm_queue: queue.Queue = queue.Queue()   # Yes/No replies from popup
-        self.clarify_queue: queue.Queue = queue.Queue()   # follow-up text replies from popup
+        self.confirm_queue: queue.Queue = queue.Queue()
+        self.clarify_queue: queue.Queue = queue.Queue()
         self._brain_agent = None
         self._brain_thread: Optional[threading.Thread] = None
         self._brain_stop = threading.Event()
@@ -389,7 +381,6 @@ class AgentRunner:
         if self.is_running:
             raise RuntimeError("An agent is already running.")
 
-        # Clear queues and reset stop flag
         while not self.input_queue.empty():
             self.input_queue.get_nowait()
         while not self.output_queue.empty():
@@ -412,13 +403,11 @@ class AgentRunner:
 
     def stop(self):
         """Create KILLME to stop any running DAQ, then signal the agent thread."""
-        # 1. Kill DAQ run first
         try:
             from tools.daq_tool import KILLME_FILE
             from pathlib import Path
             Path(KILLME_FILE).touch()
         except Exception:
             pass
-        # 2. Stop the agent thread
         self.stop_event.set()
         self.input_queue.put("종료")

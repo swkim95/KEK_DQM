@@ -65,7 +65,6 @@ class HVEqualizationSimAgent(HVEqualizationAgent):
                     if cv:
                         params["channel_values"] = cv
 
-            # 실제 하드웨어 실행 (status/voltage 모두)
             result = self.hv_control_tool.execute(params)
             self.io.send_tool_output(result)
 
@@ -84,7 +83,6 @@ class HVEqualizationSimAgent(HVEqualizationAgent):
                 self.state["last_suggested_hv_s"] = None
                 self.log(f"Real HV voltage applied: C={self.state['last_hv_c']}V, S={self.state['last_hv_s']}V")
 
-                # 전압 적용 후 자동 확인
                 self.io.send_tool_output(f"🔍 HV 적용 확인 중 ({self.tower})...")
                 verify = self.hv_control_tool.execute({
                     "command": "status",
@@ -100,7 +98,6 @@ class HVEqualizationSimAgent(HVEqualizationAgent):
             return result
 
         elif tool_name == "hv_equalization_suggest":
-            # 실제 HV 상태를 기반으로 ADC 시뮬레이션
             hv_c = float(self.state.get("last_hv_c") or 775.0)
             hv_s = float(self.state.get("last_hv_s") or 775.0)
             adc_c = self._simulate_adc("C", hv_c)

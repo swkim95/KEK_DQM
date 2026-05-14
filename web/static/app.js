@@ -72,9 +72,13 @@ function handleMessage(msg) {
       break;
 
     case 'awaiting_input':
-      // Add 완료 button inline below the last AI bubble
       awaitingInput = true;
       addCompleteButton();
+      break;
+
+    case 'awaiting_hv_confirm':
+      awaitingInput = true;
+      addHvConfirmButtons();
       break;
 
     case 'status':
@@ -91,6 +95,10 @@ function handleMessage(msg) {
     case 'agent_done':
       awaitingInput = false;
       removeCompleteButtons();
+      document.querySelectorAll('.inline-retry-btn').forEach(btn => {
+        btn.disabled = true;
+        btn.textContent = '종료됨';
+      });
       setAgentButtons(false);
       activeAgent = null;
       setStatus('대기 중', '');
@@ -119,6 +127,10 @@ function handleMessage(msg) {
         appendToolOutput('❌ ' + msg.content, true);
       }
       break;
+
+    case 'tool_error':
+      appendToolError(msg.tool_name, msg.error, msg.attempts);
+      break;
   }
 }
 
@@ -138,6 +150,59 @@ function addCompleteButton() {
 
 function removeCompleteButtons() {
   chatScroll().querySelectorAll('.complete-row').forEach(el => el.remove());
+}
+
+function addHvConfirmButtons() {
+  removeCompleteButtons();
+  const row = document.createElement('div');
+  row.className = 'complete-row hv-confirm-row';
+
+  const doneBtn = document.createElement('button');
+  doneBtn.className = 'inline-complete-btn';
+  doneBtn.textContent = '✔ 완료';
+  doneBtn.onclick = sendComplete;
+
+  const modBtn = document.createElement('button');
+  modBtn.className = 'inline-modify-btn';
+  modBtn.textContent = '✏ 수정';
+
+  const modArea = document.createElement('div');
+  modArea.className = 'hv-modify-area';
+  modArea.style.display = 'none';
+
+  const modInput = document.createElement('input');
+  modInput.type = 'text';
+  modInput.className = 'hv-modify-input';
+  modInput.placeholder = '예) C 30 올려  /  모두 40 올려  /  C=790';
+
+  const sendBtn = document.createElement('button');
+  sendBtn.className = 'inline-complete-btn';
+  sendBtn.textContent = '전송';
+  sendBtn.onclick = () => {
+    const text = modInput.value.trim();
+    if (!text) return;
+    removeCompleteButtons();
+    awaitingInput = false;
+    appendUserBubble(text);
+    send({ type: 'user_input', content: text });
+  };
+
+  modInput.addEventListener('keydown', e => {
+    if (e.key === 'Enter') sendBtn.click();
+  });
+
+  modBtn.onclick = () => {
+    modArea.style.display = modArea.style.display === 'none' ? 'flex' : 'none';
+    if (modArea.style.display === 'flex') modInput.focus();
+  };
+
+  modArea.appendChild(modInput);
+  modArea.appendChild(sendBtn);
+  row.appendChild(doneBtn);
+  row.appendChild(modBtn);
+  row.appendChild(modArea);
+  chatScroll().appendChild(row);
+  scrollBottom(chatScroll());
 }
 
 function sendComplete() {
@@ -167,7 +232,7 @@ function startAgent(agentName) {
   clearPanels();
   activeAgent = agentName;
   setAgentButtons(true);
-  setStatus(`${agentName} 시작 중...`, 'running');
+  setStatus(`${agentName} 에이전트 실행 중`, 'running');
   send({ type: 'start_agent', agent: agentName, params: {} });
 }
 
@@ -180,6 +245,10 @@ function killRun() {
   btn.disabled = true;
   send({ type: 'kill_run' });
   setTimeout(() => { btn.disabled = false; }, 2000);
+}
+
+function openHvCheck() {
+  window.open('/hv/check', '_blank', 'width=1100,height=820');
 }
 
 /* ── DOM helpers ───────────────────────────────────────────── */
@@ -204,6 +273,31 @@ function appendUserBubble(text) {
   div.className = 'user-bubble';
   div.textContent = text;
   chatScroll().appendChild(div);
+  scrollBottom(chatScroll());
+}
+
+function appendToolError(toolName, errorMsg, attempts) {
+  const div = document.createElement('div');
+  div.className = 'tool-error-bubble';
+  const title = document.createElement('span');
+  title.className = 'tool-error-title';
+  title.textContent = `Tool 오류: ${toolName}`;
+  div.appendChild(title);
+  div.appendChild(document.createTextNode(`${attempts}회 시도 모두 실패\n${errorMsg}`));
+  chatScroll().appendChild(div);
+
+  const retryRow = document.createElement('div');
+  retryRow.className = 'retry-row';
+  const retryBtn = document.createElement('button');
+  retryBtn.className = 'inline-retry-btn';
+  retryBtn.textContent = '↻ 다시 시도';
+  retryBtn.onclick = () => {
+    retryBtn.disabled = true;
+    retryBtn.textContent = '재시도 중...';
+    send({ type: 'user_input', content: 'retry' });
+  };
+  retryRow.appendChild(retryBtn);
+  chatScroll().appendChild(retryRow);
   scrollBottom(chatScroll());
 }
 
@@ -828,8 +922,10 @@ function openDqmFreeform() {
 document.addEventListener('DOMContentLoaded', () => {
   const addBtn = document.getElementById('dqm-add-btn');
   const ffBtn  = document.getElementById('dqm-freeform-btn');
+  const hvCheckBtn = document.getElementById('hv-check-btn');
   if (addBtn) addBtn.onclick = openDqmPicker;
   if (ffBtn)  ffBtn.onclick  = openDqmFreeform;
+  if (hvCheckBtn) hvCheckBtn.onclick = openHvCheck;
 
   // Initialize empty placeholder
   const cont = document.getElementById('dqm-cells');

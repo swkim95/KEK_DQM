@@ -12,7 +12,7 @@ from typing import Dict, Any, Optional, Tuple
 from pathlib import Path
 from datetime import datetime
 
-from tools.daq_tool import DAQRunTool  # 내부에서 dqm_session.start()로 DQM live 띄움
+from tools.daq_tool import DAQRunTool
 from tools.hv_control_tool import HVControlTool
 from tools.position_calculator_tool import calculate_position
 from tools.hv_equalization_tool import (
@@ -63,7 +63,7 @@ class HVEqualizationAgent(BaseAgent):
         self.daq_tool = DAQRunTool()
         self.hv_control_tool = HVControlTool()
 
-        pos = calculate_position(tower) or {"x": 0.0, "y": 0.0}
+        pos = calculate_position(tower)
         self.tower_pos = pos
 
         self.state = {
@@ -73,6 +73,7 @@ class HVEqualizationAgent(BaseAgent):
             "target_adc_c": target_adc,
             "target_adc_s": target_adc,
             "current_tower": tower,
+            "tower_pos": {"x": pos["x"], "y": pos["y"]},
             "last_hv_c": None,
             "last_hv_s": None,
             "last_suggested_hv_c": None,
@@ -206,7 +207,7 @@ After user says "완료":
             lines.append("")
 
         lines.append(f"Phase: {phase}")
-        lines.append(f"Tower: {tower} (x:{self.tower_pos['x']:.1f}, y:{self.tower_pos['y']:.1f})")
+        lines.append(f"Tower: {tower} (x:{self.state['tower_pos']['x']:.1f}, y:{self.state['tower_pos']['y']:.1f})")
         lines.append(f"Beam Energy: {self.state['beam_energy']} GeV")
         lines.append(f"Target Events: {self.state['target_events']}")
         lines.append(f"Target ADC: {self.state['target_adc_c']}")
@@ -269,9 +270,18 @@ After user says "완료":
                 if self.state.get("target_events") is not None:
                     params["events"] = self.state["target_events"]
                 params["program"] = "HV Equalization"
+                # Calibration과 동일하게 위치/자세 정보를 항상 함께 기록한다.
+                params.setdefault("pos_h", self.tower_pos["x"])
+                params.setdefault("pos_v", self.tower_pos["y"])
+                params.setdefault("pos_rot", 0.0)
+                params.setdefault("pos_tilt", 0.0)
+                params.setdefault("beam_energy", self.state.get("beam_energy", ""))
                 # DAQ 실행. daq_tool 내부의 dqm_session.start()이 monit --LIVE를 띄워
                 # DAQ 동안 우측 하단 DQM 패널이 실시간 갱신된다 — 여기가 유일한 플롯 경로.
-                result = self.daq_tool.execute(params, line_callback=self.io.send_tool_output)
+                result = self._run_tool_with_retry(
+                    lambda: self.daq_tool.execute(params, line_callback=self.io.send_tool_output),
+                    "daq_run_tool",
+                )
                 run_number = self._extract_run_number(result)
                 if run_number:
                     self.state["last_run_number"] = run_number
@@ -283,7 +293,7 @@ After user says "완료":
                 cmd = params.get("command", "").lower()
 
                 if cmd == "voltage":
-                    # LLM의 channel_values를 무시하고 state의 last_suggested 값으로 override
+                    # LLM 출력 대신 state의 last_suggested 값으로 override
                     if self.state.get("last_suggested_hv_c") is not None:
                         cv = {}
                         if not self.state.get("channel_done_c", False):
@@ -293,7 +303,10 @@ After user says "완료":
                         if cv:
                             params["channel_values"] = cv
 
-                result = self.hv_control_tool.execute(params)
+                result = self._run_tool_with_retry(
+                    lambda: self.hv_control_tool.execute(params),
+                    "hv_execute_tool",
+                )
                 self.io.send_tool_output(result)
 
                 if cmd == "status":
@@ -308,13 +321,16 @@ After user says "완료":
                     self.state["last_suggested_hv_c"] = None
                     self.state["last_suggested_hv_s"] = None
 
-                    # 전압 적용 후 자동 확인
                     self.io.send_tool_output(f"🔍 HV 적용 확인 중 ({self.tower})...")
-                    verify = self.hv_control_tool.execute({
-                        "command": "status",
-                        "channels": [f"{self.tower}C", f"{self.tower}S"],
-                    })
-                    self.io.send_tool_output(verify)
+                    try:
+                        verify = self.hv_control_tool.execute({
+                            "command": "status",
+                            "channels": [f"{self.tower}C", f"{self.tower}S"],
+                        })
+                        self.io.send_tool_output(verify)
+                    except RuntimeError as _ve:
+                        verify = ""
+                        self.io.send_tool_output(f"⚠️ HV 확인 실패 (전압 설정은 완료됨): {_ve}")
                     v_c, v_s = self._extract_voltages(verify)
                     if v_c is not None:
                         self.state["last_hv_c"] = v_c
@@ -326,7 +342,18 @@ After user says "완료":
                 params.setdefault("tower", self.tower)
                 if self.state.get("last_run_number"):
                     params.setdefault("run_number", self.state["last_run_number"])
-                result = hv_equalization_suggest.invoke(params) if hasattr(hv_equalization_suggest, "invoke") else hv_equalization_suggest(**params)
+                # 하드웨어에서 읽은 실제 HV 값을 전달 (세션 초기값 800 사용 방지)
+                if self.state.get("last_hv_c") is not None:
+                    params.setdefault("hv_c", self.state["last_hv_c"])
+                if self.state.get("last_hv_s") is not None:
+                    params.setdefault("hv_s", self.state["last_hv_s"])
+                def _call_suggest():
+                    res = hv_equalization_suggest.invoke(params) if hasattr(hv_equalization_suggest, "invoke") else hv_equalization_suggest(**params)
+                    r = json.loads(res) if isinstance(res, str) else res
+                    if isinstance(r, dict) and r.get("status") == "error":
+                        raise RuntimeError(r.get("message", "hv_equalization_suggest 실패"))
+                    return res
+                result = self._run_tool_with_retry(_call_suggest, "hv_equalization_suggest")
                 try:
                     r = json.loads(result) if isinstance(result, str) else result
                     cur = r.get("current", {})
@@ -394,6 +421,73 @@ After user says "완료":
         except Exception as e:
             self.log(f"Tool 실행 오류 ({tool_name}): {str(e)}")
             return f"Error: {str(e)}"
+
+    def _parse_hv_modify(self, text: str) -> Optional[dict]:
+        """
+        Parse relative/absolute HV modification requests.
+        Returns {"C": delta, "S": delta} for relative or {"C_abs": v, "S_abs": v} for absolute.
+        Returns None if text doesn't look like a modification.
+        """
+        t = text.strip()
+        has_dir = bool(re.search(r'올려|올리|내려|내리', t))
+        has_abs = bool(re.search(r'[CS]\s*=\s*\d', t, re.I))
+        if not (has_dir or has_abs):
+            return None
+
+        result: dict = {}
+
+        # "모두 N 올려/내려" or just "N 올려" (no channel → both)
+        all_m = re.search(r'(?:모두|둘\s*다|all)?\s*(\d+(?:\.\d+)?)\s*(올려|올리|내려|내리)', t)
+        explicit_c = re.search(r'[Cc]\s+(\d+(?:\.\d+)?)\s*(올려|올리|내려|내리)', t)
+        explicit_s = re.search(r'[Ss]\s+(\d+(?:\.\d+)?)\s*(올려|올리|내려|내리)', t)
+
+        if explicit_c or explicit_s:
+            if explicit_c:
+                v = float(explicit_c.group(1))
+                result["C"] = v if '올' in explicit_c.group(2) else -v
+            if explicit_s:
+                v = float(explicit_s.group(1))
+                result["S"] = v if '올' in explicit_s.group(2) else -v
+        elif all_m:
+            v = float(all_m.group(1))
+            delta = v if '올' in all_m.group(2) else -v
+            result["C"] = delta
+            result["S"] = delta
+
+        # Absolute: "C=790" / "S=800"
+        for ch, key in (('[Cc]', 'C_abs'), ('[Ss]', 'S_abs')):
+            m = re.search(rf'{ch}\s*=\s*(\d+(?:\.\d+)?)', t)
+            if m:
+                result[key] = float(m.group(1))
+
+        return result if result else None
+
+    def _build_approval_message(self) -> str:
+        t = self.tower
+        adc_c = self.state.get("last_adc_c")
+        adc_s = self.state.get("last_adc_s")
+        target = self.state.get("target_adc_c")
+        hv_c = self.state.get("last_hv_c") or 0
+        hv_s = self.state.get("last_hv_s") or 0
+        sug_c = self.state.get("last_suggested_hv_c")
+        sug_s = self.state.get("last_suggested_hv_s")
+        done_c = self.state.get("channel_done_c", False)
+        done_s = self.state.get("channel_done_s", False)
+        if not done_c and not done_s:
+            return (
+                f"분석 결과, 현재 ADC: {t}C={adc_c:.1f}, {t}S={adc_s:.1f} (목표: {target}). "
+                f"HV 변경 제안: {t}C {hv_c:.0f}V→{sug_c}V, {t}S {hv_s:.0f}V→{sug_s}V. 적용하시겠습니까?"
+            )
+        elif not done_c:
+            return (
+                f"분석 결과, 현재 ADC: {t}C={adc_c:.1f} (목표: {target}). "
+                f"HV 변경 제안: {t}C {hv_c:.0f}V→{sug_c}V. ({t}S 완료) 적용하시겠습니까?"
+            )
+        else:
+            return (
+                f"분석 결과, 현재 ADC: {t}S={adc_s:.1f} (목표: {target}). "
+                f"HV 변경 제안: {t}S {hv_s:.0f}V→{sug_s}V. ({t}C 완료) 적용하시겠습니까?"
+            )
 
     def _extract_voltages(self, status_output: str) -> Tuple[Optional[float], Optional[float]]:
         tower = self.tower
@@ -477,19 +571,53 @@ After user says "완료":
                 tool_name = decision.get("tool")
 
                 if message:
+                    # Approval messages must show exact state values — LLM can hallucinate
+                    # the suggested HV (especially on first iteration with low starting HV).
+                    if "적용하시겠습니까" in message and self.state.get("last_suggested_hv_c") is not None:
+                        message = self._build_approval_message()
                     self.io.send_ai_message(message)
                     self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))
                     user_input = self.io.get_input()
                     if user_input in ["종료", "exit"]:
                         break
+
+                    # HV approval: handle modify requests before proceeding
+                    if "적용하시겠습니까" in message:
+                        while True:
+                            modify = self._parse_hv_modify(user_input)
+                            if modify is None:
+                                break  # "완료" or unrecognized → proceed normally
+                            # Apply modifications: delta는 현재 HV(last_hv) 기준, 절댓값은 그대로
+                            if "C" in modify and not self.state.get("channel_done_c"):
+                                self.state["last_suggested_hv_c"] = int(round(
+                                    (self.state["last_hv_c"] or 0) + modify["C"]
+                                ))
+                            if "C_abs" in modify and not self.state.get("channel_done_c"):
+                                self.state["last_suggested_hv_c"] = int(round(modify["C_abs"]))
+                            if "S" in modify and not self.state.get("channel_done_s"):
+                                self.state["last_suggested_hv_s"] = int(round(
+                                    (self.state["last_hv_s"] or 0) + modify["S"]
+                                ))
+                            if "S_abs" in modify and not self.state.get("channel_done_s"):
+                                self.state["last_suggested_hv_s"] = int(round(modify["S_abs"]))
+
+                            self.add_to_history("user", user_input)
+                            updated_msg = self._build_approval_message()
+                            self.add_to_history("assistant", json.dumps(
+                                {"message": updated_msg}, ensure_ascii=False
+                            ))
+                            self.io.send_ai_message(updated_msg)
+                            user_input = self.io.get_input()
+                            if user_input in ["종료", "exit"]:
+                                return
+
                     self.add_to_history("user", user_input)
                     continue
 
                 if tool_name and tool_name != "none":
                     # 가드: done_channel은 두 채널 모두 수렴한 경우에만 허용
                     if tool_name == "hv_equalization_done_channel":
-                        done_c = self.state.get("channel_done_c", False)
-                        done_s = self.state.get("channel_done_s", False)
+                        done_c, done_s = self.state.get("channel_done_c", False), self.state.get("channel_done_s", False)
                         if not (done_c and done_s):
                             self.log(f"done_channel 조기 호출 차단: C={done_c}, S={done_s}")
                             self.add_to_history("assistant", json.dumps(decision, ensure_ascii=False))

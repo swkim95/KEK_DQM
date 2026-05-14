@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""
-autoTB Configuration
-Test Beam 자동화 시스템 설정
-"""
+"""autoTB Configuration"""
 
 from pathlib import Path
 
@@ -10,7 +7,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).parent
 MODELS_DIR = PROJECT_ROOT / "models"
 
-# 디렉토리 생성
 MODELS_DIR.mkdir(exist_ok=True)
 
 # ===== 모델 설정 =====
@@ -52,6 +48,6 @@ AGENT_MODELS = {
 }
 
 # ===== Agent 설정 =====
-MAX_CONVERSATION_HISTORY = 20  # 최근 대화 최대 개수
-MAX_NEW_TOKENS = 256  # LLM 생성 최대 토큰
-TEMPERATURE = 0.0  # 완전히 deterministic (자유도 최소화)
+MAX_CONVERSATION_HISTORY = 20
+MAX_NEW_TOKENS = 256
+TEMPERATURE = 0.0
