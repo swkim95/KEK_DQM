@@ -10,6 +10,7 @@ Designed to stay loaded in memory at all times (server start → server stop).
 """
 
 import json
+import re
 import time
 import threading
 import queue
@@ -112,6 +113,7 @@ class BrainAgent(BaseAgent):
         self.shared_locks = shared_locks or {}
         self.confirm_queue = confirm_queue or queue.Queue()
         self.clarify_queue = clarify_queue or queue.Queue()
+        self._last_daq_run: Optional[int] = None  # run number from last brain-initiated DAQ
 
     # ── BaseAgent abstract methods ───────────────────────────────────────────
 
@@ -121,16 +123,18 @@ class BrainAgent(BaseAgent):
     def _build_state_context(self) -> str:
         """Summarise the scenario agent's state for context."""
         s = self.shared_state
-        if not s:
-            return "(No scenario agent running)"
-
         lines = []
+
         if s.get("agent_type"):
             lines.append(f"Running agent: {s['agent_type']}")
         if s.get("current_run"):
             lines.append(f"Current run number: {s['current_run']}")
-        if s.get("last_run"):
-            lines.append(f"Last completed run: {s['last_run']}")
+
+        # shared_state may use either 'last_run' or 'last_run_number'
+        last_run = s.get("last_run") or s.get("last_run_number") or self._last_daq_run
+        if last_run:
+            lines.append(f"Last completed run: {last_run}")
+
         if s.get("current_tower"):
             lines.append(f"Current tower: {s['current_tower']}")
         if s.get("current_energy"):
@@ -175,25 +179,10 @@ class BrainAgent(BaseAgent):
 
         params = decision.get("params", {})
 
-        for _attempt in range(2):
-            missing = self._validate_params(tool_name, params)
-            if not missing:
-                break
-            field_key, question = missing
-            answer = self._ask_clarify(question, io)
-            if not answer:
-                io.send_ai_message("확인 대기 시간이 초과되어 요청을 취소했습니다.")
-                io.send_status("대기 중")
-                return
-            parsed = self._parse_clarify_answer(field_key, answer)
-            if parsed is None:
-                io.send_ai_message("답변을 이해하지 못했습니다. 요청을 취소합니다.")
-                io.send_status("대기 중")
-                return
-            params[field_key] = parsed
-        else:
-            # still missing after retries
-            io.send_ai_message("필수 정보가 누락되어 요청을 취소합니다.")
+        missing = self._validate_params(tool_name, params)
+        if missing:
+            _, question = missing
+            io.send_ai_message(question)
             io.send_status("대기 중")
             return
 
@@ -316,7 +305,16 @@ class BrainAgent(BaseAgent):
                 if tool_name == "daq_run":
                     from tools.daq_tool import DAQRunTool
                     io.send_status("DAQ 실행 중...")
-                    DAQRunTool().execute(params, line_callback=io.send_tool_output)
+                    daq_lines: list[str] = []
+                    def _daq_cb(line: str):
+                        daq_lines.append(line)
+                        io.send_tool_output(line)
+                    DAQRunTool().execute(params, line_callback=_daq_cb)
+                    for _line in daq_lines:
+                        m = re.search(r'Run:\s*(\d+)', _line)
+                        if m:
+                            self._last_daq_run = int(m.group(1))
+                            break
 
                 elif tool_name == "dqm_plot":
                     from tools.dqm_tool import DQMPlotTool

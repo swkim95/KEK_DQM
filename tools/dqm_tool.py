@@ -2,6 +2,7 @@
 """DQM Tool — C++ monit 실행으로 ROOT 파일 생성"""
 
 import os
+import re
 import subprocess
 import shutil
 from typing import Dict, Any
@@ -33,6 +34,11 @@ class DQMPlotTool(BaseTool):
         
         os.makedirs(DQM_OUTPUT_DIR, exist_ok=True)
     
+    @staticmethod
+    def _normalize_module(name: str) -> str:
+        """T1S → T1-S, T3C → T3-C. Leaves T1, MCPPMT, T1-S unchanged."""
+        return re.sub(r'^(T\d)([SC])$', r'\1-\2', name)
+
     def execute(self, params: Dict[str, Any]) -> str:
         """
         DQM Plot 생성
@@ -55,7 +61,7 @@ class DQMPlotTool(BaseTool):
         run_number = params["run_number"]
         method = params.get("method", "IntADC")
         type_ = params.get("type", "full")
-        modules = params.get("modules", [])
+        modules = [self._normalize_module(m) for m in params.get("modules", [])]
         max_event = params.get("max_event", None)
 
         try:
