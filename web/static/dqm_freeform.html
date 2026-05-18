@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<title>autoTB · DQM Freeform Viewer</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; font-family: 'Segoe UI', system-ui, sans-serif;
+               background: #0f1117; color: #dde1f0; }
+  #wrap { display: flex; height: 100vh; }
+
+  /* ── Sidebar ── */
+  #sidebar { width: 340px; min-width: 260px; background: #1a1d27;
+             border-right: 1px solid #2c2f3e; display: flex; flex-direction: column; }
+  #sidebar header { padding: 12px 14px; border-bottom: 1px solid #2c2f3e; }
+  #sidebar header h1 { font-size: 14px; color: #4f8ef7; margin-bottom: 0; }
+
+  /* ── Command builder ── */
+  .cmd-section { padding: 10px 14px; border-bottom: 1px solid #2c2f3e; }
+  .cmd-section h2 { font-size: 11px; color: #7a7f99; text-transform: uppercase;
+                     letter-spacing: 0.5px; margin-bottom: 8px; cursor: pointer; user-select: none; }
+  .cmd-section h2:hover { color: #9ca0b8; }
+  .cmd-section h2::before { content: '▾ '; font-size: 9px; }
+  .cmd-section.collapsed h2::before { content: '▸ '; }
+  .cmd-section.collapsed .cmd-body { display: none; }
+  .cmd-row { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+  .cmd-row label { font-size: 11px; color: #9ca0b8; width: 52px; flex-shrink: 0; text-align: right; }
+  .cmd-row input, .cmd-row select {
+    flex: 1; padding: 5px 8px; background: #0f1117;
+    border: 1px solid #2c2f3e; border-radius: 4px; color: #dde1f0; font-size: 12px;
+  }
+  .cmd-row select { cursor: pointer; }
+  .cmd-flags { display: flex; gap: 10px; flex-wrap: wrap; margin: 6px 0; }
+  .cmd-flags label { font-size: 11px; color: #9ca0b8; cursor: pointer; display: flex; align-items: center; gap: 3px; width: auto; }
+  .cmd-flags input[type="checkbox"] { accent-color: #4f8ef7; }
+  .cmd-preview {
+    background: #12141e; border: 1px solid #2c2f3e; border-radius: 4px;
+    padding: 6px 8px; font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 10px; color: #8bc34a; word-break: break-all; margin-top: 6px;
+  }
+  .cmd-preview span { color: #7a7f99; }
+  #exec-btn {
+    width: 100%; padding: 8px; margin-top: 8px;
+    background: #4caf50; color: #fff; border: none; border-radius: 4px;
+    font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  #exec-btn:hover { background: #43a047; }
+  #exec-btn:disabled { background: #555; cursor: not-allowed; }
+  #kill-live-btn {
+    display: none; width: 100%; padding: 8px; margin-top: 6px;
+    background: #c62828; color: #fff; border: none; border-radius: 4px;
+    font-size: 12px; font-weight: 600; cursor: pointer; animation: pulse 1.4s infinite;
+  }
+  #kill-live-btn:hover { background: #b71c1c; animation: none; }
+  #kill-live-btn:disabled { background: #555; cursor: not-allowed; animation: none; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:.65; } }
+  #exec-status { font-size: 11px; color: #7a7f99; margin-top: 6px; min-height: 16px; }
+
+  /* ── Live log pane ── */
+  #live-log-wrap {
+    display: none; border-top: 1px solid #2c2f3e; flex-direction: column;
+    max-height: 260px; min-height: 80px;
+  }
+  #live-log-wrap.visible { display: flex; }
+  #live-log-header {
+    padding: 5px 14px; display: flex; align-items: center; justify-content: space-between;
+    font-size: 10px; color: #7a7f99; text-transform: uppercase; letter-spacing: 0.5px;
+    flex-shrink: 0;
+  }
+  #live-log-header span { display: flex; align-items: center; gap: 5px; }
+  .live-dot { width: 6px; height: 6px; border-radius: 50%; background: #f44336;
+              animation: pulse 1.4s infinite; flex-shrink: 0; }
+  #live-log {
+    flex: 1; overflow-y: auto; padding: 4px 10px 8px;
+    font-family: 'SF Mono', 'Fira Code', 'Courier New', monospace;
+    font-size: 10px; color: #c5cae9; line-height: 1.5;
+    background: #0a0c14; white-space: pre-wrap; word-break: break-all;
+  }
+
+  /* ── Run browser ── */
+  #run-browser { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+  .browser-header {
+    padding: 8px 14px; border-bottom: 1px solid #2c2f3e;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .browser-header h2 { font-size: 11px; color: #7a7f99; text-transform: uppercase; letter-spacing: 0.5px; }
+  .browser-header button {
+    background: none; border: 1px solid #2c2f3e; border-radius: 3px;
+    color: #7a7f99; font-size: 10px; padding: 2px 8px; cursor: pointer;
+  }
+  .browser-header button:hover { color: #dde1f0; border-color: #4f8ef7; }
+  #run-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
+  .run-group { margin-bottom: 2px; }
+  .run-head {
+    padding: 7px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+    display: flex; align-items: center; gap: 6px; user-select: none;
+  }
+  .run-head:hover { background: #23273a; }
+  .run-head .arrow { font-size: 9px; color: #7a7f99; width: 10px; }
+  .run-head .run-num { font-weight: 600; color: #dde1f0; }
+  .run-head .badge {
+    font-size: 9px; padding: 1px 5px; border-radius: 3px;
+    font-weight: 600; text-transform: uppercase;
+  }
+  .badge-method { background: #1e3a5f; color: #64b5f6; }
+  .badge-auxcut { background: #4a2c00; color: #ffb74d; }
+  .run-head .count { font-size: 10px; color: #7a7f99; margin-left: auto; }
+  .run-canvases { display: none; padding-left: 20px; }
+  .run-group.open > .run-canvases { display: block; }
+  .run-group.open > .run-head { background: #1e2233; }
+  .run-group.open > .run-head .arrow { color: #4f8ef7; }
+  .canvas-item {
+    padding: 6px 10px; margin-bottom: 2px; border-radius: 4px;
+    cursor: pointer; font-size: 12px; border: 1px solid transparent;
+  }
+  .canvas-item:hover { background: #23273a; border-color: #4f8ef7; }
+  .canvas-item.active { background: #2a3148; border-color: #4f8ef7; color: #4f8ef7; }
+  .canvas-item .meta { display: block; font-size: 10px; color: #7a7f99; margin-top: 1px; }
+
+  /* ── Main draw area ── */
+  #main { flex: 1; padding: 12px; overflow: hidden; display: flex; flex-direction: column; }
+  #main header { font-size: 12px; color: #7a7f99; margin-bottom: 8px;
+                 padding-bottom: 8px; border-bottom: 1px solid #2c2f3e; }
+  #draw { flex: 1; background: #fff; border-radius: 6px; display: none; }
+  #draw.visible { display: block; }
+  #draw-placeholder { flex: 1; display: flex; align-items: center; justify-content: center;
+                      color: #7a7f99; font-size: 13px; border: 1px dashed #2c2f3e; border-radius: 6px; }
+  .empty { color: #7a7f99; font-size: 13px; padding: 20px; text-align: center; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="sidebar">
+    <header>
+      <div style="display:flex;align-items:center;gap:8px;">
+        <img src="/static/DREAM_LOGO.png" alt="DREAM" style="height:24px;" />
+        <h1>DQM Freeform Viewer</h1>
+      </div>
+    </header>
+
+    <div class="cmd-section" id="cmd-section">
+      <h2 onclick="toggleCmdSection()">Monit Command Builder</h2>
+      <div class="cmd-body">
+        <div class="cmd-row">
+          <label>Run #</label>
+          <input id="inp-run" type="number" placeholder="12345" />
+        </div>
+        <div class="cmd-row">
+          <label>Type</label>
+          <select id="inp-type" onchange="onTypeChange()">
+            <option value="full" selected>full</option>
+            <option value="heatmap">heatmap</option>
+            <option value="single">single</option>
+            <option value="module">module</option>
+          </select>
+          <label style="width:auto;margin-left:4px;">Method</label>
+          <select id="inp-method">
+            <option value="IntADC" selected>IntADC</option>
+            <option value="PeakADC">PeakADC</option>
+            <option value="Avg">Avg</option>
+            <option value="Overlay">Overlay</option>
+          </select>
+        </div>
+        <div class="cmd-row" id="row-module" style="display:none;">
+          <label>Module</label>
+          <input id="inp-module" type="text" placeholder="" />
+        </div>
+        <div id="module-hint" style="display:none;font-size:10px;color:#7a7f99;margin:2px 0 4px 58px;line-height:1.4;"></div>
+        <div class="cmd-row">
+          <label>MaxEvt</label>
+          <input id="inp-maxevent" type="number" placeholder="(all)" />
+        </div>
+        <div class="cmd-flags">
+          <label><input type="checkbox" id="flag-AUXcut" /> AUXcut</label>
+          <label><input type="checkbox" id="flag-LIVE" /> LIVE</label>
+        </div>
+        <div class="cmd-preview">
+          <span>Generated:</span> <span id="cmd-text"></span>
+        </div>
+        <button id="exec-btn" onclick="executeMonit()">EXECUTE ./monit</button>
+        <button id="kill-live-btn" onclick="killLive()">STOP LIVE</button>
+        <div id="exec-status"></div>
+      </div>
+    </div>
+
+    <div id="live-log-wrap">
+      <div id="live-log-header">
+        <span><span class="live-dot"></span>monit stdout</span>
+        <button onclick="clearLog()" style="background:none;border:1px solid #2c2f3e;border-radius:3px;color:#7a7f99;font-size:10px;padding:1px 6px;cursor:pointer;">clear</button>
+      </div>
+      <div id="live-log"></div>
+    </div>
+
+    <div id="run-browser">
+      <div class="browser-header">
+        <h2>Run History</h2>
+        <button onclick="loadRuns()">↻ 새로고침</button>
+      </div>
+      <div id="run-list"><div class="empty">로딩 중...</div></div>
+    </div>
+  </div>
+
+  <div id="main">
+    <header id="title">캔버스를 선택하세요</header>
+    <div id="draw-placeholder">왼쪽에서 Run을 펼치고 캔버스를 클릭하세요</div>
+    <div id="draw"></div>
+  </div>
+</div>
+
+<script src="/jsroot/jsroot.js"></script>
+<script>
+const JSROOT = window.JSROOT;
+
+/* ── Command builder ────────────────────────────────────── */
+function toggleCmdSection() {
+  document.getElementById('cmd-section').classList.toggle('collapsed');
+}
+
+const TYPE_META = {
+  full:    { needsModule: false, methods: ['IntADC', 'PeakADC'], hint: '' },
+  heatmap: { needsModule: true,  methods: ['IntADC', 'PeakADC'], hint: 'SiPM 또는 MCPPMT' },
+  module:  { needsModule: true,  methods: ['IntADC', 'PeakADC'], hint: 'SiPM 또는 MCPPMT' },
+  single:  { needsModule: true,  methods: ['IntADC', 'PeakADC', 'Avg', 'Overlay'],
+             hint: 'T1 T2 T3 ... (공백 구분) 또는 T1-S T1-C 등 채널명' },
+};
+
+function onTypeChange() {
+  const type = document.getElementById('inp-type').value;
+  const meta = TYPE_META[type] || TYPE_META.full;
+
+  // Show/hide module row
+  document.getElementById('row-module').style.display = meta.needsModule ? '' : 'none';
+  document.getElementById('module-hint').style.display = meta.needsModule ? '' : 'none';
+  document.getElementById('module-hint').textContent = meta.hint;
+
+  // Update method options
+  const sel = document.getElementById('inp-method');
+  const cur = sel.value;
+  sel.innerHTML = meta.methods.map(m =>
+    `<option value="${m}"${m === cur ? ' selected' : ''}>${m}</option>`
+  ).join('');
+  if (!meta.methods.includes(cur)) sel.value = meta.methods[0];
+
+  updatePreview();
+}
+
+function getParams() {
+  const run = parseInt(document.getElementById('inp-run').value) || 0;
+  const type = document.getElementById('inp-type').value;
+  const method = document.getElementById('inp-method').value;
+  const moduleRaw = document.getElementById('inp-module').value.trim();
+  // Split space-separated module names → array
+  const modules = moduleRaw ? moduleRaw.split(/\s+/) : [];
+  const maxEvt = parseInt(document.getElementById('inp-maxevent').value) || null;
+  const flags = [];
+  ['AUXcut', 'LIVE'].forEach(f => {
+    if (document.getElementById('flag-' + f).checked) flags.push(f);
+  });
+  return { run_number: run, type, method, modules, max_event: maxEvt, flags };
+}
+
+function updatePreview() {
+  const p = getParams();
+  if (!p.run_number) { document.getElementById('cmd-text').textContent = '(Run # 필요)'; return; }
+  let cmd = `./monit --RunNumber ${p.run_number} --type ${p.type} --method ${p.method}`;
+  if (p.modules.length) cmd += ` --module ${p.modules.join(' ')}`;
+  if (p.max_event) cmd += ` --MaxEvent ${p.max_event}`;
+  p.flags.forEach(f => cmd += ` --${f}`);
+  document.getElementById('cmd-text').textContent = cmd;
+}
+
+document.querySelectorAll('#sidebar input, #sidebar select').forEach(el => {
+  el.addEventListener('input', updatePreview);
+  el.addEventListener('change', updatePreview);
+});
+onTypeChange(); // init
+
+let _liveRunNumber = null;
+let _livePollTimer = null;
+let _logPollTimer = null;
+let _logOffset = 0;
+
+function setLiveMode(active) {
+  const killBtn = document.getElementById('kill-live-btn');
+  const execBtn = document.getElementById('exec-btn');
+  const logWrap = document.getElementById('live-log-wrap');
+  killBtn.style.display = active ? 'block' : 'none';
+  killBtn.disabled = false;
+  execBtn.disabled = active;
+  logWrap.classList.toggle('visible', active);
+}
+
+function clearLog() {
+  document.getElementById('live-log').textContent = '';
+  _logOffset = 0;
+}
+
+// Progress lines look like "2410 / 3003 events  0:03 left ..."
+const _PROGRESS_RE = /^\s*\d+ \/ \d+ events/;
+
+function _appendLog(lines) {
+  if (!lines.length) return;
+  const el = document.getElementById('live-log');
+  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+
+  for (const line of lines) {
+    const isProgress = _PROGRESS_RE.test(line);
+    const last = el.lastElementChild;
+    if (isProgress && last && last.dataset.prog === '1') {
+      // overwrite the previous progress line in-place
+      last.textContent = line;
+    } else {
+      const div = document.createElement('div');
+      div.textContent = line;
+      if (isProgress) div.dataset.prog = '1';
+      el.appendChild(div);
+    }
+  }
+
+  if (atBottom) el.scrollTop = el.scrollHeight;
+}
+
+function startLogPoll() {
+  _logOffset = 0;
+  document.getElementById('live-log').textContent = '';
+  _logPollTimer = setInterval(async () => {
+    try {
+      const r = await fetch(`/api/dqm/live-log?since=${_logOffset}`);
+      const d = await r.json();
+      if (d.lines.length) {
+        _appendLog(d.lines);
+        _logOffset = d.total;
+      }
+    } catch (_) {}
+  }, 800);
+}
+
+function stopLogPoll() {
+  if (_logPollTimer !== null) { clearInterval(_logPollTimer); _logPollTimer = null; }
+  // Flush remaining lines once
+  fetch(`/api/dqm/live-log?since=${_logOffset}`).then(r => r.json()).then(d => {
+    if (d.lines.length) { _appendLog(d.lines); _logOffset = d.total; }
+  }).catch(() => {});
+}
+
+function startLivePoll() {
+  _livePollTimer = setInterval(async () => {
+    try {
+      const r = await fetch('/api/dqm/live-status');
+      const d = await r.json();
+      if (!d.alive) {
+        stopLivePoll();
+        stopLogPoll();
+        setLiveMode(false);
+        document.getElementById('exec-status').textContent = '⏹ LIVE 종료됨';
+        document.getElementById('exec-status').style.color = '#7a7f99';
+        loadRuns();
+      } else {
+        loadRuns();
+      }
+    } catch (_) {}
+  }, 3000);
+}
+
+function stopLivePoll() {
+  if (_livePollTimer !== null) { clearInterval(_livePollTimer); _livePollTimer = null; }
+}
+
+async function killLive() {
+  const killBtn = document.getElementById('kill-live-btn');
+  const status = document.getElementById('exec-status');
+  killBtn.disabled = true;
+  killBtn.textContent = '종료 중...';
+  status.textContent = '';
+  stopLivePoll();
+  stopLogPoll();
+  try {
+    await fetch('/api/dqm/kill-live', { method: 'POST' });
+    status.textContent = '⏹ LIVE 종료 완료';
+    status.style.color = '#7a7f99';
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    status.style.color = '#f44336';
+  } finally {
+    setLiveMode(false);
+    killBtn.textContent = 'STOP LIVE';
+    loadRuns();
+  }
+}
+
+async function executeMonit() {
+  const p = getParams();
+  if (!p.run_number) { alert('Run 번호를 입력하세요.'); return; }
+
+  const btn = document.getElementById('exec-btn');
+  const status = document.getElementById('exec-status');
+  btn.disabled = true;
+  btn.textContent = '실행 중...';
+  status.textContent = '';
+  stopLivePoll();
+
+  const isLive = p.flags.includes('LIVE');
+
+  try {
+    const res = await fetch('/api/dqm/run-monit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(p),
+    });
+    const data = await res.json();
+    if (data.error) {
+      status.textContent = '❌ ' + data.error;
+      status.style.color = '#f44336';
+      return;
+    }
+
+    if (data.live) {
+      _liveRunNumber = data.run_number;
+      status.textContent = `⚡ LIVE 실행 중 (Run ${data.run_number}, PID ${data.pid})`;
+      status.style.color = '#ffb74d';
+      setLiveMode(true);
+      startLivePoll();
+      startLogPoll();
+    } else {
+      status.textContent = `✅ 완료 (exit ${data.exit_code}) · ${data.canvases.length}개 캔버스`;
+      status.style.color = '#8bc34a';
+      loadRuns();
+    }
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    status.style.color = '#f44336';
+  } finally {
+    if (!isLive) {
+      btn.disabled = false;
+    }
+    btn.textContent = 'EXECUTE ./monit';
+  }
+}
+
+/* ── Run browser ────────────────────────────────────────── */
+let activeCanvasEl = null;
+
+async function loadRuns() {
+  const list = document.getElementById('run-list');
+  try {
+    const res = await fetch('/api/dqm/runs');
+    const runs = await res.json();
+    if (!runs.length) {
+      list.innerHTML = '<div class="empty">output 디렉토리에 파일이 없습니다</div>';
+      return;
+    }
+    list.innerHTML = '';
+    runs.forEach(run => {
+      const group = document.createElement('div');
+      group.className = 'run-group';
+
+      const head = document.createElement('div');
+      head.className = 'run-head';
+      let badges = run.methods.map(m => `<span class="badge badge-method">${m}</span>`).join('');
+      if (run.auxcut) badges += ' <span class="badge badge-auxcut">AUXcut</span>';
+      head.innerHTML = `
+        <span class="arrow">▸</span>
+        <span class="run-num">Run ${run.run_number}</span>
+        ${badges}
+        <span class="count">${run.count}개</span>
+      `;
+      head.onclick = () => {
+        group.classList.toggle('open');
+        head.querySelector('.arrow').textContent = group.classList.contains('open') ? '▾' : '▸';
+      };
+      group.appendChild(head);
+
+      const canvasDiv = document.createElement('div');
+      canvasDiv.className = 'run-canvases';
+      run.canvases.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'canvas-item';
+        let metaText = `${c.type} · ${c.method}`;
+        if (c.auxcut) metaText += ' · AUXcut';
+        item.innerHTML = `${c.canvas}<span class="meta">${metaText}</span>`;
+        item.onclick = (e) => {
+          e.stopPropagation();
+          if (activeCanvasEl) activeCanvasEl.classList.remove('active');
+          item.classList.add('active');
+          activeCanvasEl = item;
+          drawCanvas(c.filename, c.canvas, c.type, c.method, c.auxcut, run.run_number);
+        };
+        canvasDiv.appendChild(item);
+      });
+      group.appendChild(canvasDiv);
+      list.appendChild(group);
+    });
+  } catch (e) {
+    list.innerHTML = `<div class="empty">로드 실패: ${e.message}</div>`;
+  }
+}
+
+async function drawCanvas(filename, canvas, type, method, auxcut, runNum) {
+  const label = `${canvas}  ·  Run ${runNum}  ·  ${type}/${method}` + (auxcut ? '  · AUXcut' : '');
+  document.getElementById('title').textContent = label;
+  try {
+    const r = await fetch(`/dqm-output/${filename}?t=${Date.now()}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const text = await r.text();
+    const obj = JSROOT.parse(text);
+    if (!obj) throw new Error('Failed to parse ROOT JSON');
+    const drawEl = document.getElementById('draw');
+    document.getElementById('draw-placeholder').style.display = 'none';
+    drawEl.classList.add('visible');
+    await JSROOT.cleanup(drawEl);
+    await JSROOT.draw(drawEl, obj, '');
+  } catch (e) {
+    document.getElementById('title').textContent = `오류: ${e.message}`;
+  }
+}
+
+/* ── Init ───────────────────────────────────────────────── */
+const _params = new URLSearchParams(location.search);
+const urlRun = _params.get('run');
+if (urlRun) {
+  document.getElementById('inp-run').value = urlRun;
+  const urlMethod = _params.get('method');
+  if (urlMethod) document.getElementById('inp-method').value = urlMethod;
+  updatePreview();
+}
+
+loadRuns();
+
+// Restore live state if a live process survived a page reload
+(async () => {
+  try {
+    const r = await fetch('/api/dqm/live-status');
+    const d = await r.json();
+    if (d.alive) {
+      _liveRunNumber = d.run_number;
+      const status = document.getElementById('exec-status');
+      status.textContent = `⚡ LIVE 실행 중 (Run ${d.run_number})`;
+      status.style.color = '#ffb74d';
+      setLiveMode(true);
+      startLivePoll();
+      startLogPoll();
+    }
+  } catch (_) {}
+})();
+</script>
+</body>
+</html>

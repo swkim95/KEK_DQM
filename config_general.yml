@@ -1,0 +1,82 @@
+BaseDirectory: "/Volumes/yhep/scratch/YUdaq"
+Mapping: "/Users/yhep/autoTB/DQM/mapping/toymapping.root"
+
+# ===== 경로 설정  =====
+Paths:
+  RunNumberFile: "/Volumes/yhep/scratch/notice/test/TB_daq/runnum.txt"
+  JsonKeyFile: "/Users/yhep/autoTB/logging/auto-logging-486908-9688f3064ef9.json"
+  SpreadsheetId: "1V28RNHiscra5_y1kzlodzq1DiIw76fAdDkj-t9tzf1U"
+  DaqWorkDir: "/Users/yhep/scratch/notice/test/TB_daq"
+  DaqScript: "/Users/yhep/scratch/notice/test/TB_daq/run_all.sh"
+  NoticeBase: "/Volumes/yhep/scratch/notice"
+  KillMeFile: "/Volumes/yhep/scratch/notice/test/TB_daq/KILLME"
+
+  DqmDir: "/Users/yhep/autoTB/DQM"
+
+# ===== Mac Studio SSH =====
+StudioSSH:
+  Host: "192.168.100.5"
+  User: "yhep"
+  KeyFile: "/Users/yhep/.ssh/id_ed25519"
+
+# ===== HV SSH =====
+HV:
+  SSH:
+    Host: "165.132.25.82"
+    Port: 1234
+    Username: "yoolab"
+    Password: "37326"
+  Paths:
+    WrapperWorkDir: "/home/yoolab/Downloads/CAENHV/SY5527/CAENHVWrapper/HVWrapperDemo"
+    ConfigFullPath: "/home/yoolab/Downloads/CAENHV/SY5527/CAENHVWrapper/config/config.txt"
+
+# ===== Position Scan 결과 (T5 기준 절대 좌표, mm) =====
+PositionScan:
+  OffsetX: 9933.0       # T5 중심 X 좌표 (mm)
+  OffsetY: 1066.0       # T5 중심 Y 좌표 (mm)
+  TowerWidth: 46.333    # X 방향 타워 간격 (mm)
+  TowerHeight: 50.0     # Y 방향 타워 간격 (mm)
+
+# ===== Position Calculator 물리 상수 =====
+PositionConstants:
+  TiltingAxis: 53.5         # mm, 드는 점부터 틸팅 축까지 거리
+  RotationAxisAngle: 11.72  # degree, Rotation axis 기준각
+  RotationAxisDist: 2.4     # mm, Rotation axis 거리
+
+AUX:
+  WC:
+    CALIB: 0.05            # mm/ns
+    CENTER: [-71.8982, -116.249]     # Reference timing offsets (ns) for X and Y
+    THRESHOLD: 0.3         # Leading-edge fraction
+    POSCUT: 5           # Optional |x|,|y| cut in mm
+    
+ModuleConfig:
+  trg1: [80, 230]
+  trg2: [80, 230]
+  VETO: [100, 200]
+  trg1NIM: [100, 200]
+  trg2NIM: [100, 200]
+  VETONIM: [100, 200]
+  COIN: [200, 900]
+  WCX: [400, 800]
+  WCY: [400, 800]
+  NIM: [400, 800]
+  T1-S: [150, 350]
+  T2-S: [150, 350]
+  T3-S: [150, 350]
+  T4-S: [150, 350]
+  T5-S: [150, 350]
+  T6-S: [150, 350]
+  T7-S: [150, 350]
+  T8-S: [150, 350]
+  T9-S: [150, 350]
+  T1-C: [150, 310]
+  T2-C: [150, 310]
+  T3-C: [150, 310]
+  T4-C: [150, 310]
+  T5-C: [150, 310]
+  T6-C: [150, 310]
+  T7-C: [150, 310]
+  T8-C: [150, 310]
+  T9-C: [150, 310]
+
