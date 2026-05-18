@@ -170,15 +170,23 @@
           <label>MaxEvt</label>
           <input id="inp-maxevent" type="number" placeholder="(all)" />
         </div>
+        <div class="cmd-row">
+          <label>AUXcut</label>
+          <select id="opt-AUXcut">
+            <option value="none" selected>none</option>
+            <option value="WC">WC only</option>
+            <option value="WCHodo">WC + hodo</option>
+          </select>
+        </div>
         <div class="cmd-flags">
-          <label><input type="checkbox" id="flag-AUXcut" /> AUXcut</label>
+          <label><input type="checkbox" id="flag-AUX" /> AUX</label>
           <label><input type="checkbox" id="flag-LIVE" /> LIVE</label>
         </div>
         <div class="cmd-preview">
           <span>Generated:</span> <span id="cmd-text"></span>
         </div>
         <button id="exec-btn" onclick="executeMonit()">EXECUTE ./monit</button>
-        <button id="kill-live-btn" onclick="killLive()">STOP LIVE</button>
+        <button id="kill-live-btn" onclick="stopMonit()">STOP LIVE</button>
         <div id="exec-status"></div>
       </div>
     </div>
@@ -253,10 +261,18 @@ function getParams() {
   const modules = moduleRaw ? moduleRaw.split(/\s+/) : [];
   const maxEvt = parseInt(document.getElementById('inp-maxevent').value) || null;
   const flags = [];
-  ['AUXcut', 'LIVE'].forEach(f => {
+  ['AUX', 'LIVE'].forEach(f => {
     if (document.getElementById('flag-' + f).checked) flags.push(f);
   });
-  return { run_number: run, type, method, modules, max_event: maxEvt, flags };
+  // AUXcut is now a 3-option dropdown: none / WC / WCHodo. Anything other
+  // than 'none' turns on the AUXcut flag; the mode itself is forwarded as
+  // a separate field so the server can pass --AUXCutMode through to monit.
+  const auxCutMode = document.getElementById('opt-AUXcut').value;
+  if (auxCutMode !== 'none') flags.push('AUXcut');
+  return {
+    run_number: run, type, method, modules, max_event: maxEvt,
+    flags, aux_cut_mode: auxCutMode,
+  };
 }
 
 function updatePreview() {
@@ -266,6 +282,9 @@ function updatePreview() {
   if (p.modules.length) cmd += ` --module ${p.modules.join(' ')}`;
   if (p.max_event) cmd += ` --MaxEvent ${p.max_event}`;
   p.flags.forEach(f => cmd += ` --${f}`);
+  if (p.aux_cut_mode && p.aux_cut_mode !== 'none') {
+    cmd += ` --AUXCutMode ${p.aux_cut_mode}`;
+  }
   document.getElementById('cmd-text').textContent = cmd;
 }
 
@@ -279,6 +298,11 @@ let _liveRunNumber = null;
 let _livePollTimer = null;
 let _logPollTimer = null;
 let _logOffset = 0;
+// Tracks whether a monit run is currently in flight, and which kind:
+//   null       → idle
+//   'live'     → --LIVE run, STOP routes to /api/dqm/kill-live (sentinel)
+//   'blocking' → non-LIVE run, STOP routes to /api/dqm/kill-blocking (SIGINT)
+let _runMode = null;
 
 function setLiveMode(active) {
   const killBtn = document.getElementById('kill-live-btn');
@@ -286,8 +310,22 @@ function setLiveMode(active) {
   const logWrap = document.getElementById('live-log-wrap');
   killBtn.style.display = active ? 'block' : 'none';
   killBtn.disabled = false;
+  killBtn.textContent = 'STOP LIVE';
   execBtn.disabled = active;
   logWrap.classList.toggle('visible', active);
+}
+
+// Lighter-weight counterpart to setLiveMode for the non-LIVE branch.
+// We deliberately do NOT toggle the log pane: the caller already shows
+// it on EXECUTE and we want the final progress lines to remain visible
+// after the run ends.
+function setBlockingMode(active) {
+  const killBtn = document.getElementById('kill-live-btn');
+  const execBtn = document.getElementById('exec-btn');
+  killBtn.style.display = active ? 'block' : 'none';
+  killBtn.disabled = false;
+  killBtn.textContent = active ? 'STOP' : 'STOP LIVE';
+  execBtn.disabled = active;
 }
 
 function clearLog() {
@@ -351,6 +389,7 @@ function startLivePoll() {
       if (!d.alive) {
         stopLivePoll();
         stopLogPoll();
+        _runMode = null;
         setLiveMode(false);
         document.getElementById('exec-status').textContent = '⏹ LIVE 종료됨';
         document.getElementById('exec-status').style.color = '#7a7f99';
@@ -382,10 +421,41 @@ async function killLive() {
     status.textContent = '❌ ' + e.message;
     status.style.color = '#f44336';
   } finally {
+    _runMode = null;
     setLiveMode(false);
     killBtn.textContent = 'STOP LIVE';
     loadRuns();
   }
+}
+
+// Abort the currently running non-LIVE monit (SIGINT to its process group,
+// like Ctrl+C in a shell). The /api/dqm/run-monit POST that's still
+// awaiting the subprocess will return shortly with a non-zero exit code,
+// at which point executeMonit's normal completion handler re-enables the
+// EXECUTE button. We do NOT call stopLogPoll / setBlockingMode here:
+// the in-flight executeMonit handler does that for us when the response
+// comes back, which keeps the cleanup ordering consistent with a natural
+// (non-aborted) exit.
+async function killBlocking() {
+  const killBtn = document.getElementById('kill-live-btn');
+  const status = document.getElementById('exec-status');
+  killBtn.disabled = true;
+  killBtn.textContent = '종료 중...';
+  try {
+    await fetch('/api/dqm/kill-blocking', { method: 'POST' });
+    status.textContent = '⏹ 사용자 중단 (SIGINT 전송됨, 프로세스 종료 대기 중...)';
+    status.style.color = '#7a7f99';
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    status.style.color = '#f44336';
+  }
+}
+
+// Single click handler for the STOP / STOP LIVE button. Routes to the
+// right kill endpoint depending on which mode of run is active.
+function stopMonit() {
+  if (_runMode === 'live')     return killLive();
+  if (_runMode === 'blocking') return killBlocking();
 }
 
 async function executeMonit() {
@@ -394,12 +464,30 @@ async function executeMonit() {
 
   const btn = document.getElementById('exec-btn');
   const status = document.getElementById('exec-status');
+  const logWrap = document.getElementById('live-log-wrap');
   btn.disabled = true;
   btn.textContent = '실행 중...';
   status.textContent = '';
   stopLivePoll();
+  stopLogPoll();
 
   const isLive = p.flags.includes('LIVE');
+
+  // Show the progress pane and stream stdout/stderr for every run, not
+  // just LIVE. The server pushes lines into the same live-log deque
+  // whether or not --LIVE was passed.
+  logWrap.classList.add('visible');
+  startLogPoll();
+
+  // For non-LIVE: show the STOP button immediately so the user can abort
+  // a wrongly-configured run while monit is still working. (For LIVE we
+  // do this after the fetch succeeds, since LIVE returns ~instantly with
+  // a PID and we want to keep setLiveMode as the single source of truth
+  // for the LIVE-mode UI state.)
+  if (!isLive) {
+    _runMode = 'blocking';
+    setBlockingMode(true);
+  }
 
   try {
     const res = await fetch('/api/dqm/run-monit', {
@@ -409,6 +497,8 @@ async function executeMonit() {
     });
     const data = await res.json();
     if (data.error) {
+      stopLogPoll();
+      if (!isLive) { _runMode = null; setBlockingMode(false); }
       status.textContent = '❌ ' + data.error;
       status.style.color = '#f44336';
       return;
@@ -416,17 +506,29 @@ async function executeMonit() {
 
     if (data.live) {
       _liveRunNumber = data.run_number;
+      _runMode = 'live';
       status.textContent = `⚡ LIVE 실행 중 (Run ${data.run_number}, PID ${data.pid})`;
       status.style.color = '#ffb74d';
       setLiveMode(true);
       startLivePoll();
-      startLogPoll();
+      // startLogPoll() was already called above.
     } else {
-      status.textContent = `✅ 완료 (exit ${data.exit_code}) · ${data.canvases.length}개 캔버스`;
-      status.style.color = '#8bc34a';
+      stopLogPoll();
+      _runMode = null;
+      setBlockingMode(false);
+      const exit = data.exit_code;
+      if (exit === 0) {
+        status.textContent = `✅ 완료 (exit ${exit}) · ${data.canvases.length}개 캔버스`;
+        status.style.color = '#8bc34a';
+      } else {
+        status.textContent = `⚠ 종료 (exit ${exit}) · 로그 확인`;
+        status.style.color = '#ffb74d';
+      }
       loadRuns();
     }
   } catch (e) {
+    stopLogPoll();
+    if (!isLive) { _runMode = null; setBlockingMode(false); }
     status.textContent = '❌ ' + e.message;
     status.style.color = '#f44336';
   } finally {
@@ -533,6 +635,7 @@ loadRuns();
     const d = await r.json();
     if (d.alive) {
       _liveRunNumber = d.run_number;
+      _runMode = 'live';
       const status = document.getElementById('exec-status');
       status.textContent = `⚡ LIVE 실행 중 (Run ${d.run_number})`;
       status.style.color = '#ffb74d';

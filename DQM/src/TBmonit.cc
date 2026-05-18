@@ -38,6 +38,7 @@ TBmonit<T>::TBmonit(const std::string &fConfig_, int fRunNum_)
   fIsLive = false;
   fAuxPlotting = false;
   fAuxCut  = false;
+  fAuxCutMode = "WC";
   fDraw = false;
   fUtility = TButility();
 }
@@ -66,6 +67,12 @@ TBmonit<T>::TBmonit(ObjectCollection* fObj_)
   fObj->GetVariable("LIVE", &fIsLive);
   fObj->GetVariable("AUX", &fAuxPlotting);
   fObj->GetVariable("AUXcut", &fAuxCut);
+  // GetVariable<string>() returns "null" when the CLI flag is missing,
+  // so we have to explicitly fall back to "WC" to preserve the legacy
+  // --AUXcut behavior when --AUXCutMode is not provided.
+  std::string auxCutModeArg;
+  fObj->GetVariable("AUXCutMode", &auxCutModeArg);
+  fAuxCutMode = (auxCutModeArg == "null" || auxCutModeArg.empty()) ? "WC" : auxCutModeArg;
   fObj->GetVariable("DRAW", &fDraw);
 
   fObj->GetVariable("particle", &fParticle);
@@ -207,6 +214,7 @@ void TBmonit<T>::LoopLive() {
   if (fAuxCut) {
     fPlotter.SetAUXCut(true);
     fAux.SetAUXCut(true);
+    fAux.SetAUXCutMode(fAuxCutMode);
   }
 
   TBread<TBwaveform> readerWave =
@@ -275,6 +283,7 @@ void TBmonit<T>::LoopAfterRun() {
   if (fAuxCut) {
     fPlotter.SetAUXCut(true);
     fAux.SetAUXCut(true);
+    fAux.SetAUXCutMode(fAuxCutMode);
   }
 
   std::string aCase;
