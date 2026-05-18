@@ -61,6 +61,11 @@ ObjectCollection::ObjectCollection(int argc, char* argv[])
       }
     }
 
+    if (fArgv[i] == "--Config") {
+      i++;
+      AddVariable("Config", fArgv[i]);
+    }
+
     if (fArgv[i] == "--AUXcut")
       AddVariable("AUXcut", true);
 
