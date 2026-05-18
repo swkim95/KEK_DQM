@@ -37,6 +37,31 @@ AUX:
     CENTER: [-71.8982, -116.249]     # Reference timing offsets (ns) for X and Y
     THRESHOLD: 0.3         # Leading-edge fraction
     POSCUT: 5           # Optional |x|,|y| cut in mm
+
+  Hodoscope:
+    # Reference point in raw fiber coordinates (X_ref, Y_ref in fiber units,
+    # 0..16) where the beam-center actually falls. The center-corrected
+    # hodoscope plot shifts this point onto the nominal hodoscope center
+    # (8, 8). Default [8, 8] means "no correction" (corrected ≡ raw).
+    # Update this after a calibration run, just like AUX.WC.CENTER.
+    CENTER: [8, 8]
+    # Which brightest-fiber metric to feed into the WC↔Hodo inclination cut
+    # (--AUXCutMode WCHodo). Both metrics are always *displayed* in the AUX
+    # plots; this only selects which one decides whether an event passes
+    # IsPassing(). Accepted: IntADC | PeakADC. Default: IntADC.
+    CUT_METHOD: IntADC
+
+  # ── Beam-inclination cut ─────────────────────────────────────────────────
+  # Only active when --AUXcut is on AND --AUXCutMode WCHodo is selected.
+  # On top of the WC POSCUT, rejects events whose (center-corrected) WC and
+  # hodoscope beam-spot positions disagree by more than these limits, in mm:
+  #     |x_WC_corrected − x_Hodo_corrected| < INCLINATION_CUT[0]
+  #     |y_WC_corrected − y_Hodo_corrected| < INCLINATION_CUT[1]
+  # This removes inclined / off-axis beam events that would still pass the
+  # WC POSCUT alone (e.g. a particle that grazes the WC center but enters
+  # the hodoscope a few mm away — it would miss our detector's front face
+  # center). Hodoscope position is taken from the IntADC brightest fiber.
+  INCLINATION_CUT: [4, 4]
     
 ModuleConfig:
   trg1: [80, 230]

@@ -414,6 +414,13 @@ class MonitRequest(BaseModel):
     modules: List[str] = []
     max_event: Optional[int] = None
     flags: List[str] = []
+    # AUXcut mode chosen in the freeform UI dropdown:
+    #   "none"   → no AUX cut (no --AUXcut)
+    #   "WC"     → WC-only beam-spot cut    (--AUXcut --AUXCutMode WC)
+    #   "WCHodo" → WC + hodoscope correlation cut (--AUXcut --AUXCutMode WCHodo)
+    # The flags list also carries "AUXcut" when mode != "none" so the rest
+    # of the pipeline (filename suffixes, run-history badges) keeps working.
+    aux_cut_mode: Optional[str] = None
 
 # ── Freeform LIVE process tracker ─────────────────────────────────────────────
 import subprocess as _subprocess
@@ -485,6 +492,13 @@ async def api_run_monit(req: MonitRequest):
     for flag in req.flags:
         if flag in ("LIVE", "AUXcut", "AUX"):
             cmd.append(f"--{flag}")
+    # Forward the AUXcut mode when an actual cut is requested. The C++ side
+    # currently parses this flag as a no-op (until the position-correlation
+    # cut is wired into TBaux::IsPassing), so all modes still produce the
+    # same cut for now; the plumbing exists so the next step can simply
+    # consume the mode without further server-side changes.
+    if req.aux_cut_mode and req.aux_cut_mode != "none":
+        cmd.extend(["--AUXCutMode", req.aux_cut_mode])
 
     generated_cmd = " ".join(cmd)
 

@@ -170,9 +170,16 @@
           <label>MaxEvt</label>
           <input id="inp-maxevent" type="number" placeholder="(all)" />
         </div>
+        <div class="cmd-row">
+          <label>AUXcut</label>
+          <select id="opt-AUXcut">
+            <option value="none" selected>none</option>
+            <option value="WC">WC only</option>
+            <option value="WCHodo">WC + hodo</option>
+          </select>
+        </div>
         <div class="cmd-flags">
           <label><input type="checkbox" id="flag-AUX" /> AUX</label>
-          <label><input type="checkbox" id="flag-AUXcut" /> AUXcut</label>
           <label><input type="checkbox" id="flag-LIVE" /> LIVE</label>
         </div>
         <div class="cmd-preview">
@@ -254,10 +261,18 @@ function getParams() {
   const modules = moduleRaw ? moduleRaw.split(/\s+/) : [];
   const maxEvt = parseInt(document.getElementById('inp-maxevent').value) || null;
   const flags = [];
-  ['AUX', 'AUXcut', 'LIVE'].forEach(f => {
+  ['AUX', 'LIVE'].forEach(f => {
     if (document.getElementById('flag-' + f).checked) flags.push(f);
   });
-  return { run_number: run, type, method, modules, max_event: maxEvt, flags };
+  // AUXcut is now a 3-option dropdown: none / WC / WCHodo. Anything other
+  // than 'none' turns on the AUXcut flag; the mode itself is forwarded as
+  // a separate field so the server can pass --AUXCutMode through to monit.
+  const auxCutMode = document.getElementById('opt-AUXcut').value;
+  if (auxCutMode !== 'none') flags.push('AUXcut');
+  return {
+    run_number: run, type, method, modules, max_event: maxEvt,
+    flags, aux_cut_mode: auxCutMode,
+  };
 }
 
 function updatePreview() {
@@ -267,6 +282,9 @@ function updatePreview() {
   if (p.modules.length) cmd += ` --module ${p.modules.join(' ')}`;
   if (p.max_event) cmd += ` --MaxEvent ${p.max_event}`;
   p.flags.forEach(f => cmd += ` --${f}`);
+  if (p.aux_cut_mode && p.aux_cut_mode !== 'none') {
+    cmd += ` --AUXCutMode ${p.aux_cut_mode}`;
+  }
   document.getElementById('cmd-text').textContent = cmd;
 }
 
