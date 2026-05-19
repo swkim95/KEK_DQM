@@ -792,6 +792,129 @@ async def api_kill_blocking():
     return {"ok": True, "run_number": run_number}
 
 
+def _enumerate_monit_processes() -> list[dict]:
+    """Find every running ``./monit`` process (excluding this web server).
+
+    Uses psutil instead of shell-parsing ``ps aux`` so we look at the actual
+    argv vector rather than a substring of the textual command line — that
+    keeps ``./monitor``, ``demonit_helper``, etc. from being mistaken for
+    monit. A process counts as ./monit iff:
+      * argv[0] is ``./monit`` exactly, OR
+      * argv[0]'s basename is ``monit`` AND its path is a relative ``./monit``
+        form (sometimes ps captures the resolved absolute path; in that case
+        we additionally accept the case where the executable's name is
+        ``monit`` to handle background runs launched via the project's
+        Makefile/shell wrappers).
+    Always skips our own pid so the kill endpoint can never SIGKILL the web
+    server itself.
+    """
+    try:
+        import psutil
+    except ImportError:
+        return []
+
+    own_pid = os.getpid()
+    procs: list[dict] = []
+    for p in psutil.process_iter(["pid", "name", "cmdline", "username"]):
+        try:
+            info = p.info
+            pid = info.get("pid")
+            if pid is None or pid == own_pid:
+                continue
+            cmdline = info.get("cmdline") or []
+            if not cmdline:
+                continue
+            argv0 = cmdline[0]
+            name = info.get("name") or ""
+            is_relative_monit = argv0 == "./monit"
+            is_absolute_monit = (
+                os.path.basename(argv0) == "monit" and name == "monit"
+            )
+            if not (is_relative_monit or is_absolute_monit):
+                continue
+            procs.append({
+                "pid": pid,
+                "username": info.get("username") or "",
+                "cmdline": " ".join(cmdline),
+                "argv0": argv0,
+            })
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return procs
+
+
+@app.get("/api/dqm/find-monit-processes")
+async def api_find_monit_processes():
+    """List every running ./monit process for the confirmation modal."""
+    procs = _enumerate_monit_processes()
+    return {"ok": True, "count": len(procs), "processes": procs}
+
+
+@app.post("/api/dqm/kill-all-monit")
+async def api_kill_all_monit():
+    """SIGTERM (then SIGKILL after a short grace period) every ./monit.
+
+    Re-enumerates inside this handler so the modal preview and the actual
+    kill list are validated against the same psutil snapshot (no TOCTOU
+    against a stale modal that the user left open for minutes). Skips our
+    own pid, never touches non-./monit processes, and reports a per-PID
+    success/failure result for the UI.
+    """
+    try:
+        import psutil
+        import signal as _signal_mod
+    except ImportError:
+        return {"ok": False, "error": "psutil not available", "killed_count": 0}
+
+    own_pid = os.getpid()
+    targets = _enumerate_monit_processes()
+
+    killed: list[int] = []
+    failed: list[dict] = []
+
+    for proc_info in targets:
+        pid = proc_info["pid"]
+        if pid == own_pid:
+            continue
+        try:
+            p = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            continue
+
+        try:
+            p.send_signal(_signal_mod.SIGTERM)
+        except (psutil.NoSuchProcess, psutil.AccessDenied) as e:
+            failed.append({"pid": pid, "reason": str(e)})
+            continue
+
+        try:
+            p.wait(timeout=2.0)
+            killed.append(pid)
+            continue
+        except psutil.TimeoutExpired:
+            pass
+
+        try:
+            p.send_signal(_signal_mod.SIGKILL)
+            p.wait(timeout=2.0)
+            killed.append(pid)
+        except (psutil.NoSuchProcess, psutil.TimeoutExpired, psutil.AccessDenied) as e:
+            failed.append({"pid": pid, "reason": str(e)})
+
+    msg = f"Killed {len(killed)} ./monit process(es)"
+    if failed:
+        msg += f"; {len(failed)} failed"
+
+    return {
+        "ok": True,
+        "message": msg,
+        "killed_count": len(killed),
+        "failed_count": len(failed),
+        "killed_pids": killed,
+        "failed": failed,
+    }
+
+
 @app.get("/api/dqm/live-status")
 async def api_live_status():
     """Return whether a freeform LIVE process is currently running."""

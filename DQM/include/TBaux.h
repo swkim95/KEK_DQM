@@ -147,6 +147,11 @@ private:
   std::vector<TBcid> fCIDtoPlot;
   std::map<std::string, std::vector<int>> fRangeMap;
 
+  // True only when all three WC channels (WCX/WCY/NIM) resolved to valid
+  // CIDs in the loaded mapping. Used to gate Fill()/IsPassing() so a mapping
+  // without WC (e.g. mapping_TB2025_v1.root for MCPPMT runs) doesn't crash
+  // when --AUX or --AUXcut is requested.
+  bool fWCEnabled;
   TBcid fCID_WCX;
   TBcid fCID_WCY;
   TBcid fCID_NIM;
@@ -158,10 +163,14 @@ private:
   bool fHodoEnabled;
   std::vector<TBcid> fCID_HodoX;   // 16 entries
   std::vector<TBcid> fCID_HodoY;   // 16 entries
-  int fHodoIntFirst;
-  int fHodoIntLast;
-  int fHodoPeakFirst;
-  int fHodoPeakLast;
+  // Per-fiber search-window [first, last] for the brightest-fiber scan.
+  // The same window feeds both GetIntADC and GetPeakADC for that fiber.
+  // Read from ModuleConfig.HX1..HX16 / HY1..HY16 in SetRange(); falls back
+  // to (150, 350) per fiber when an entry is missing.
+  std::vector<int> fHodoFirstX;    // 16 entries
+  std::vector<int> fHodoLastX;     // 16 entries
+  std::vector<int> fHodoFirstY;    // 16 entries
+  std::vector<int> fHodoLastY;     // 16 entries
   // Reference fiber position (X_ref, Y_ref) where the beam-center sits
   // before any correction. Read from AUX.Hodoscope.CENTER; defaults to
   // the nominal center (8, 8) which means "no correction".

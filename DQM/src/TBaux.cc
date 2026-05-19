@@ -27,16 +27,17 @@ TBaux::TBaux(const YAML::Node fNodePlot_, int fRunNum_, bool fPlotting_, bool fL
   fWCCalibration(0.05),
   fWCReference(2, 0.),
   fWCPosCut(-1.),
+  fWCEnabled(false),
   fCID_WCX(),
   fCID_WCY(),
   fCID_NIM(),
   fHodoEnabled(false),
   fCID_HodoX(),
   fCID_HodoY(),
-  fHodoIntFirst(150),
-  fHodoIntLast(350),
-  fHodoPeakFirst(150),
-  fHodoPeakLast(350),
+  fHodoFirstX(16, 150),
+  fHodoLastX(16, 350),
+  fHodoFirstY(16, 150),
+  fHodoLastY(16, 350),
   fHodoCenter(2, 8.0f),
   fHodoCutMethod("IntADC"),
   fHodoIntADC(nullptr),
@@ -82,6 +83,18 @@ void TBaux::init() {
   fCID_WCY = fUtility.GetCID("WCY");
   fCID_NIM = fUtility.GetCID("NIM");
 
+  // TButility::GetCID() returns TBcid(-1, -1) when the channel name is not
+  // present in the loaded mapping. Defer enabling WC processing until we
+  // know every WC channel resolved — otherwise Fill() and IsPassing() will
+  // call anEvent.GetData(TBcid(-1, -1)).waveform() and throw out_of_range.
+  auto cidValid = [](const TBcid& c) { return c.mid() >= 0 && c.channel() >= 0; };
+  fWCEnabled = cidValid(fCID_WCX) && cidValid(fCID_WCY) && cidValid(fCID_NIM);
+  if (!fWCEnabled) {
+    std::cout << "[TBaux] WC channels missing from the loaded mapping "
+              << "(WCX/WCY/NIM); --AUX plots and --AUXcut will be skipped."
+              << std::endl;
+  }
+
   fCIDtoPlot.push_back(fCID_WCX);
   fCIDtoPlot.push_back(fCID_WCY);
   fCIDtoPlot.push_back(fCID_NIM);
@@ -97,18 +110,18 @@ void TBaux::init() {
   fCanvas->cd(1)->SetRightMargin(0.13);
 
   // ── Hodoscope ─────────────────────────────────────────────────────────
-  // 16 X-fibers and 16 Y-fibers. We mirror the dummy naming used in
-  // draw_hodoscope.cc:75-107 — the hodoscope mapping isn't ready yet, so
-  // both X and Y borrow the existing tower channel names. When the proper
-  // mapping arrives, only the two hodoX_names / hodoY_names lists below
-  // need to change.
+  // 16 X-fibers and 16 Y-fibers. Channel names must exist in the mapping
+  // file pointed to by config_general.yml::Mapping (e.g. toymapping_v2.root
+  // contains HX1..HX16 / HY1..HY16). The order here defines the fiber
+  // index 0..15 used in the 2D hit-map plots — keep it strictly sequential
+  // so bin N == fiber HX(N+1).
   const std::vector<std::string> hodoX_names = {
-    "T1-C","T2-C","T3-C","T4-C","T5-C","T6-C","T7-C","T8-C","T9-C",
-    "T1-S","T2-S","T3-S","T4-S","T5-S","T6-S","T7-S"
+    "HX1","HX2","HX3","HX4","HX5","HX6","HX7","HX8",
+    "HX9","HX10","HX11","HX12","HX13","HX14","HX15","HX16"
   };
   const std::vector<std::string> hodoY_names = {
-    "T1-C","T2-C","T3-C","T4-C","T5-C","T6-C","T7-C","T8-C","T9-C",
-    "T1-S","T2-S","T3-S","T4-S","T5-S","T6-S","T7-S"
+    "HY1","HY2","HY3","HY4","HY5","HY6","HY7","HY8",
+    "HY9","HY10","HY11","HY12","HY13","HY14","HY15","HY16"
   };
 
   fCID_HodoX.clear();
@@ -117,6 +130,18 @@ void TBaux::init() {
   fCID_HodoY.reserve(hodoY_names.size());
   for (const auto& n : hodoX_names) fCID_HodoX.push_back(fUtility.GetCID(n));
   for (const auto& n : hodoY_names) fCID_HodoY.push_back(fUtility.GetCID(n));
+
+  // Only enable the hodoscope path if every HX/HY name resolved. Mixing
+  // valid and invalid CIDs would crash GetHodoscopeRawPosition() the same
+  // way the WC code would crash with missing CIDs.
+  bool hodoAllValid = true;
+  for (const auto& cid : fCID_HodoX) hodoAllValid &= cidValid(cid);
+  for (const auto& cid : fCID_HodoY) hodoAllValid &= cidValid(cid);
+  if (!hodoAllValid) {
+    std::cout << "[TBaux] Hodoscope channels missing from the loaded mapping "
+              << "(HX1..HX16 / HY1..HY16); hodoscope AUX plots will be skipped."
+              << std::endl;
+  }
 
   // Make sure TBread fetches the MIDs hosting these channels too.
   for (const auto& cid : fCID_HodoX) fCIDtoPlot.push_back(cid);
@@ -186,7 +211,7 @@ void TBaux::init() {
   fCanvasHodoPeakADC_corr = new TCanvas("fCanvas_HodoPeakADC_corr", "fCanvas_HodoPeakADC_corr", 800, 800);
   fCanvasHodoPeakADC_corr->cd()->SetRightMargin(0.13);
 
-  fHodoEnabled = true;
+  fHodoEnabled = hodoAllValid;
 }
 
 void TBaux::SetParticle(std::string fParticle_) {
@@ -221,17 +246,22 @@ void TBaux::SetRange(const YAML::Node tConfigNode) {
   // Example usage:
   // fRangeMap.insert(std::make_pair("WCX", tConfigNode["WCX"].as<std::vector<int>>()));
 
-  // ModuleConfig.Hodoscope: { INT_RANGE: [a, b], PEAK_RANGE: [c, d] }
-  // If the entry is missing, the constructor defaults (150, 350) are kept.
-  const auto hodo = tConfigNode["Hodoscope"];
-  if (hodo) {
-    if (hodo["INT_RANGE"]) {
-      const auto r = hodo["INT_RANGE"].as<std::vector<int>>();
-      if (r.size() == 2) { fHodoIntFirst = r[0]; fHodoIntLast = r[1]; }
+  // Per-fiber search windows. Read ModuleConfig.HX1..HX16 / HY1..HY16 (the
+  // same entries TBplotengine uses for `--type single --module HX1`, so
+  // there is a single source of truth for hodoscope ranges). Each entry is
+  // [first, last] and is applied to BOTH the IntADC and PeakADC brightest-
+  // fiber scans on that fiber. If a key is missing, the per-fiber default
+  // (150, 350) seeded in the constructor is kept.
+  for (int i = 0; i < 16; ++i) {
+    const std::string nameX = "HX" + std::to_string(i + 1);
+    const std::string nameY = "HY" + std::to_string(i + 1);
+    if (tConfigNode[nameX]) {
+      const auto r = tConfigNode[nameX].as<std::vector<int>>();
+      if (r.size() == 2) { fHodoFirstX[i] = r[0]; fHodoLastX[i] = r[1]; }
     }
-    if (hodo["PEAK_RANGE"]) {
-      const auto r = hodo["PEAK_RANGE"].as<std::vector<int>>();
-      if (r.size() == 2) { fHodoPeakFirst = r[0]; fHodoPeakLast = r[1]; }
+    if (tConfigNode[nameY]) {
+      const auto r = tConfigNode[nameY].as<std::vector<int>>();
+      if (r.size() == 2) { fHodoFirstY[i] = r[0]; fHodoLastY[i] = r[1]; }
     }
   }
 }
@@ -312,7 +342,9 @@ std::vector<float> TBaux::GetPosition(const std::vector<std::vector<float>>& wav
 void TBaux::Fill(TBevt<TBwaveform> anEvent) {
 
   // ── Wire chamber position ───────────────────────────────────────────────
-  if (fWCPosition) {
+  // Skip when the loaded mapping has no WC channels (fWCEnabled == false);
+  // GetData on an invalid CID would throw out_of_range.
+  if (fWCEnabled && fWCPosition) {
     std::vector<std::vector<float>> wcWaves;
     wcWaves.reserve(3);
     wcWaves.push_back(anEvent.GetData(fCID_WCX).pedcorrectedWaveform());
@@ -349,13 +381,13 @@ std::vector<float> TBaux::GetHodoscopeRawPosition(TBevt<TBwaveform> anEvent) {
   for (int i = 0; i < 16; ++i) {
     const std::vector<short> wfX = anEvent.GetData(fCID_HodoX[i]).waveform();
     const std::vector<short> wfY = anEvent.GetData(fCID_HodoY[i]).waveform();
-    if (wfX.size() > static_cast<size_t>(fHodoIntLast)) {
-      intADC_X[i]  = static_cast<float>(GetIntADC (wfX, fHodoIntFirst,  fHodoIntLast ));
-      peakADC_X[i] = static_cast<float>(GetPeakADC(wfX, fHodoPeakFirst, fHodoPeakLast));
+    if (wfX.size() > static_cast<size_t>(fHodoLastX[i])) {
+      intADC_X[i]  = static_cast<float>(GetIntADC (wfX, fHodoFirstX[i], fHodoLastX[i]));
+      peakADC_X[i] = static_cast<float>(GetPeakADC(wfX, fHodoFirstX[i], fHodoLastX[i]));
     }
-    if (wfY.size() > static_cast<size_t>(fHodoIntLast)) {
-      intADC_Y[i]  = static_cast<float>(GetIntADC (wfY, fHodoIntFirst,  fHodoIntLast ));
-      peakADC_Y[i] = static_cast<float>(GetPeakADC(wfY, fHodoPeakFirst, fHodoPeakLast));
+    if (wfY.size() > static_cast<size_t>(fHodoLastY[i])) {
+      intADC_Y[i]  = static_cast<float>(GetIntADC (wfY, fHodoFirstY[i], fHodoLastY[i]));
+      peakADC_Y[i] = static_cast<float>(GetPeakADC(wfY, fHodoFirstY[i], fHodoLastY[i]));
     }
   }
 
@@ -398,6 +430,11 @@ void TBaux::FillHodoscope(TBevt<TBwaveform> anEvent) {
 }
 
 bool TBaux::IsPassing(TBevt<TBwaveform> anEvent) {
+
+  // If the loaded mapping has no WC, we cannot compute the beam-spot or the
+  // WC↔Hodo inclination, so --AUXcut is a no-op (let every event through).
+  // The warning was printed once at init time.
+  if (!fWCEnabled) return true;
 
   // ── (1) WC beam-spot cut (center-corrected; in mm, centered on 0) ──
   std::vector<std::vector<float>> wcWaves;
